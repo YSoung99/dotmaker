@@ -1,1 +1,47 @@
-{"type":"module","private":true}
+{
+  "name": "dotmaker",
+  "productName": "도트메이커",
+  "version": "3.0.0",
+  "description": "캐릭터 그림을 원본 그대로 살린 도트 그림으로 바꾸는 프로그램",
+  "author": "YSoung99",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "start": "node tools/build.mjs && electron .",
+    "dist:win": "node tools/build.mjs && electron-builder --win nsis --x64 --publish never",
+    "dist:mac": "node tools/build.mjs && electron-builder --mac dmg --arm64 --publish never"
+  },
+  "build": {
+    "appId": "io.github.ysoung99.dotmaker",
+    "productName": "도트메이커",
+    "artifactName": "DotMaker-${version}-${os}-${arch}.${ext}",
+    "files": [
+      "desktop/**",
+      "dist/도트메이커.html",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "도트메이커"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.graphics-design"
+    },
+    "icon": "desktop/icons/icon.png"
+  },
+  "devDependencies": {
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0"
+  }
+}

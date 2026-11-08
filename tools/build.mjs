@@ -9,7 +9,7 @@ const read = path => readFileSync(new URL(path, root), 'utf8');
 const core = read('src/core.js').replace(/^export (?=const|function|class|let)/gm, '');
 const graph = readFileSync(new URL('src/lines-graph.onnx', root)).toString('base64');
 const ai = read('src/ai.js').replace("'__LINES_GRAPH__'", () => `'${graph}'`).replace("'__LINES_MANIFEST__'", () => read('src/lines-manifest.json'));
-const parts = { '/*CORE*/': core, '/*FILES*/': read('src/files.js'), '/*AI*/': ai, '/*WORKER*/': read('src/worker.js'), '/*APP*/': [read('src/cloud.js'), read('src/pixellab.js'), read('src/app.js'), read('src/lab.js')].join('\n') };
+const parts = { '/*CORE*/': core, '/*FILES*/': read('src/files.js'), '/*AI*/': ai + '\n' + read('src/jev-core.js'), '/*WORKER*/': read('src/worker.js'), '/*APP*/': [read('src/cloud.js'), read('src/pixellab.js'), read('src/jev-app.js'), read('src/app.js'), read('src/lab.js')].join('\n') };
 let html = read('src/app.html');
 for (const [mark, text] of Object.entries(parts)) {
   if (/<\/script/i.test(text)) throw new Error(`${mark}에 </script가 들어 있어 묶을 수 없습니다.`);

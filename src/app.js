@@ -1,7 +1,6 @@
 // 도트메이커 웹 버전 화면. 변환·AI는 작업자(worker.js)가 하고, 여기서는 열기·설정·미리보기·저장·설명서만 한다.
-const VERSION = '2.9.0';
+const VERSION = '3.0.0';
 const STAGES = {
-  reduce: { name: '축소', instruction: '배경을 지우고 선과 비율을 살려 투명 캔버스에 맞춥니다.' },
   dot: { name: '도트화', instruction: '머리와 몸통을 구분해 검은 윤곽과 몸통 경계색을 적용합니다.' },
   repair: { name: 'AI 보정', instruction: '클라우드 AI(PixelLab·Gemini·OpenAI)에 캐릭터를 보내 도트 그림으로 다시 그립니다. 쓰려면 그 서비스의 내 API 키가 필요합니다.' },
   lab: { name: 'PixelLab' },
@@ -14,13 +13,15 @@ const store = {
 };
 
 const state = {
-  stage: 'reduce',
+  stage: 'dot',
   width: '100',
   height: '100',
   settings: defaultSettings(),
   exportScale: [1, 2, 4, 8].includes(store.get('exportScale', 1)) ? store.get('exportScale', 1) : 1,
   original: null,   // 원본 미리보기 { w, h, bytes }
   product: null,    // { reduced, dotted, status } — 그림은 { w, h, bytes }
+  jev: null,        // JEV 결과 창 { focus, rows, picks, base } 또는 키 설정 창 { settings: true }
+  jevApplied: false,
   fileName: null,
   busy: null,
   error: null,
@@ -198,10 +199,11 @@ async function open(file) {
   submittedSettings = settings;
   engine.submit('open', { original, w: size[0], h: size[1], settings }, '원본에서 캐릭터 분리 중', data => {
     applyProduct(data);
+    state.jevApplied = false;
     state.original = { w: original.w, h: original.h, bytes: Raster.fromPremultiplied(original.data, original.w, original.h).straightBytes() };
     state.fileName = file.name;
     state.cloud.result = null;
-    if (state.stage !== 'help') state.stage = 'reduce';
+    if (state.stage !== 'help') state.stage = 'dot';
   });
 }
 
@@ -303,6 +305,7 @@ function save() {
 
 function setSetting(key, value) {
   state.settings = { ...state.settings, [key]: value };
+  state.jevApplied = false;
   update();
   redot();
 }
@@ -394,26 +397,29 @@ function toggle(text, checked, onChange, disabled, title = '') {
 function controls(stage) {
   if (stage === 'repair') return cloudControls();
   const busy = Boolean(state.busy), loaded = Boolean(state.product);
-  if (stage === 'reduce') {
-    const sizeInput = (key, label) => {
-      const input = el('input', { type: 'text', inputMode: 'numeric', value: state[key], disabled: busy });
-      input.setAttribute('aria-label', label);
-      input.oninput = () => { state[key] = input.value.trim(); };
-      input.onkeydown = event => { if (event.key === 'Enter') resize(); };
-      return input;
-    };
-    return row(el('span', { textContent: '캔버스' }), sizeInput('width', '가로'), el('span', { textContent: '×' }), sizeInput('height', '세로'),
-      el('span', { className: 'muted', textContent: 'px' }), el('button', { type: 'button', textContent: '크기 적용', disabled: busy || !loaded, onclick: resize }));
-  }
+  // 결과 크기: 100×100 ~ 200×200(10px 단위, 정사각형). 고르면 바로 다시 그린다.
+  const sizeSelect = el('select', { disabled: busy, onchange: event => { state.width = state.height = event.target.value; resize(); } },
+    ...Array.from({ length: 11 }, (_, k) => 100 + k * 10).map(v => el('option', { value: String(v), textContent: `${v}×${v}`, selected: String(v) === state.width })));
+  sizeSelect.setAttribute('aria-label', '결과 크기');
+  const sizeRow = row(labelled('결과 크기', sizeSelect));
   if (stage === 'dot') {
     // 설정은 계산 중에도 바꿀 수 있다(마지막 설정으로 다시 계산).
     const s = state.settings, off = !loaded, soft = s.method === 'soft';
+    const methods = segmented([['faithful', '원본 보존'], ['soft', '원본 색 살림'], ['berry', '베리 잉크'], ['basic', '2.0 방식']], s.method, v => setSetting('method', v), off, '도트화 방식');
+    if (s.method === 'faithful') {
+      return el('div', { className: 'stack' }, sizeRow, row(methods),
+        row(toggle('바깥 외곽선 1픽셀 검정', s.crispOutline, v => setSetting('crispOutline', v), off,
+          '가장 바깥 외곽선을 검은 1픽셀로 또렷하게 긋고 그 바깥의 흐린 칸을 지웁니다. 흰 외곽선 장식과 바닥 그림자는 그대로 둡니다.'),
+        toggle('경계 섞인 색 정리', s.cleanBlends, v => setSetting('cleanBlends', v), off,
+          '축소하면서 경계에 생긴 탁한 중간색(빨강+검정 → 자주 등)을 가까운 원래 색으로 바꿉니다. 부드러운 명암은 건드리지 않습니다.')),
+        jevControls());
+    }
     // 원본 색 살림은 원본 선을 그대로 살리는 방식이라 외곽선·선 추출·경계색을 쓰지 않는다.
     const colorStepper = soft
       ? stepper(`최대 ${s.softColors}색`, s.softColors, 4, 64, 2, v => setSetting('softColors', v), off)
       : stepper(`최대 ${s.colors}색`, s.colors, 6, 32, 1, v => setSetting('colors', v), off);
-    return el('div', { className: 'stack' },
-      row(segmented([['soft', '원본 색 살림'], ['berry', '베리 잉크'], ['basic', '2.0 방식']], s.method, v => setSetting('method', v), off, '도트화 방식')),
+    return el('div', { className: 'stack' }, sizeRow,
+      row(methods),
       soft && row(toggle('선 1픽셀로 정리', s.softLines, v => setSetting('softLines', v), off,
         '큰 원본에서 선의 가운데 줄기를 찾아 그 줄기가 지나는 칸만 선으로 칠합니다. 선이 끊기거나 뭉치지 않고 입(ω) 같은 작은 모양이 살아납니다. 원본이 굵은 선 그림이면 꺼 보세요.'),
         toggle('선명하게', s.softVivid, v => setSetting('softVivid', v), off,
@@ -525,7 +531,9 @@ function statusLine(stage) {
 function screen(stage) {
   if (stage === 'help') return helpScreen();
   if (stage === 'lab') return labScreen();
-  const instruction = stage === 'dot' && state.settings.method === 'soft'
+  const instruction = stage === 'dot' && state.settings.method === 'faithful'
+    ? '원본 한 장을 열면 선 굵기와 명암을 살려 투명 PNG 크기에 맞춥니다. 원본에서 바로 격자 칸마다 색을 읽습니다.'
+    : stage === 'dot' && state.settings.method === 'soft'
     ? '원본의 색을 살리고 색 수만 줄여 도트로 바꿉니다. 선은 원본에서 줄기를 찾아 1픽셀로 정리하고, 색은 조금 더 선명하게, 바깥 테두리와 색 면은 깔끔하게 정리합니다.'
     : STAGES[stage].instruction;
   const page = el('div', { className: 'screen' }, el('p', { className: 'muted', textContent: instruction }), controls(stage));
@@ -536,20 +544,15 @@ function screen(stage) {
         : preview(input ? `보낼 그림 · ${input.name}` : '보낼 그림 · 지금 도트화 결과', input ? input.picture : result('dot'), true),
       preview('결과', r?.final ?? null, true)));
   } else if (state.product && state.original) {
-    page.append(stage === 'reduce'
-      ? el('div', { className: 'previews' }, preview('원본', state.original, false), preview('결과', result('reduce'), true))
-      : el('div', { className: 'previews' }, preview('축소 이미지', result('reduce'), true), preview('결과', result('dot'), true)));
+    page.append(state.settings.method === 'faithful'
+        ? el('div', { className: 'previews' }, preview('원본', state.original, false), preview('결과', result('dot'), true))
+        : el('div', { className: 'previews' }, preview('축소 이미지', result('reduce'), true), preview('결과', result('dot'), true)));
   } else {
     page.append(el('button', { type: 'button', className: 'empty drop', onclick: () => $('file').click() },
       el('strong', { textContent: '캐릭터 이미지를 여기에 놓으십시오' }), el('span', { textContent: 'PNG, JPEG, WebP 등 이미지 파일 · 눌러서 고를 수도 있어요' })));
   }
-  if (stage === 'reduce') {
-    page.append(row(el('span', { className: 'spacer' }), el('button', {
-      type: 'button', className: 'primary', textContent: '도트화로 가져가기 →', disabled: !state.product,
-      onclick: () => { state.stage = 'dot'; update(); },
-    })));
-  }
   page.append(statusLine(stage));
+  if (state.jev) page.append(jevSheet());
   return page;
 }
 
@@ -649,8 +652,11 @@ function update() {
   $('scale').value = String(state.exportScale);
   const focused = document.activeElement?.getAttribute('aria-label');
   const scroll = $('panel').firstChild?.scrollTop ?? 0;
+  const sheetScroll = document.querySelector('.sheet')?.scrollTop ?? 0;
   $('panel').replaceChildren(screen(state.stage));
   $('panel').firstChild.scrollTop = scroll;
+  const sheet = document.querySelector('.sheet');
+  if (sheet) sheet.scrollTop = sheetScroll;
   if (focused === '가로' || focused === '세로') {
     const input = document.querySelector(`[aria-label="${focused}"]`);
     input?.focus();
@@ -659,7 +665,7 @@ function update() {
 }
 
 // ───────────── 시작
-$('version').textContent = `웹 버전 ${VERSION}`;
+$('version').textContent = `${desktop ? '프로그램' : '웹 버전'} ${VERSION}`;
 $('open').onclick = () => $('file').click();
 $('file').onchange = event => { open(event.target.files[0]); event.target.value = ''; };
 $('save').onclick = save;

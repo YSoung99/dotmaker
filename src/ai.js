@@ -8,24 +8,35 @@ const LINES_MANIFEST = '__LINES_MANIFEST__';
 
 async function download(id, progress) {
   const file = AI_FILES[id];
-  let response;
-  try {
-    response = await fetch(file.url);
-  } catch {
-    throw new DotError(`${file.title}을(를) 받지 못했습니다. 인터넷 연결을 확인하거나, 설명서 탭에서 파일을 직접 받아 넣어 주세요.`);
-  }
-  if (!response.ok) throw new DotError(`${file.title}을(를) 받지 못했습니다. (HTTP ${response.status})`);
-  // CDN은 압축해서 보내기도 해서 content-length를 믿지 않고, 풀린 크기를 목록의 크기와 맞춰 본다.
-  const reader = response.body.getReader();
   const bytes = new Uint8Array(file.size);
-  let received = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (received + value.length > bytes.length) throw new DotError(`${file.title} 크기가 예상과 다릅니다.`);
-    bytes.set(value, received);
-    received += value.length;
-    progress(`${file.title} 받는 중 (처음 한 번, ${Math.round(received / 1048576)}/${Math.round(file.size / 1048576)}MB)`);
+  let received = 0, resumable = false;
+  // 큰 모델은 받는 도중 연결이 끊기기 쉬워서, 끊기면 받은 데부터 이어받는다(최대 3번).
+  // 압축해서 보내는 서버는 위치가 압축 전후로 달라 이어받을 수 없어 처음부터 다시 받는다.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      if (!resumable) received = 0;
+      const response = await fetch(file.url, received ? { headers: { Range: `bytes=${received}-` } } : {});
+      if (!response.ok) throw new DotError(`${file.title}을(를) 받지 못했습니다. (HTTP ${response.status})`);
+      // 서버가 이어받기를 무시하고 처음부터 보내면 처음부터 다시 센다.
+      if (received && response.status !== 206) received = 0;
+      resumable = !response.headers.get('content-encoding') && response.headers.get('accept-ranges') === 'bytes';
+      // CDN은 압축해서 보내기도 해서 content-length를 믿지 않고, 풀린 크기를 목록의 크기와 맞춰 본다.
+      const reader = response.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (received + value.length > bytes.length) throw new DotError(`${file.title} 크기가 예상과 다릅니다.`);
+        bytes.set(value, received);
+        received += value.length;
+        progress(`${file.title} 받는 중 (처음 한 번, ${Math.round(received / 1048576)}/${Math.round(file.size / 1048576)}MB)`);
+      }
+      break;
+    } catch (error) {
+      if (error instanceof DotError) throw error;
+      if (attempt >= 3) throw new DotError(`${file.title}을(를) 받지 못했습니다. 인터넷 연결을 확인하거나, 설명서 탭에서 파일을 직접 받아 넣어 주세요.`);
+      progress(`${file.title} 연결이 끊겨 이어받는 중 (${attempt + 1}/3)`);
+      await new Promise(done => setTimeout(done, 1500 * (attempt + 1)));
+    }
   }
   if (received !== file.size) throw new DotError(`${file.title} 크기가 예상과 다릅니다.`);
   return bytes;
@@ -111,8 +122,10 @@ async function removeBackground(image, progress) {
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) crop[y * w + x] = output[(y + top) * s + x + left];
   const mask = bilinear(crop, w, h, w0, h0, 1);
   const out = new Uint8Array(w0 * h0 * 4);
+  // 모델은 몸통도 0.85~0.99로만 확신해서 그대로 쓰면 캐릭터 전체가 비친다(맥판과 같은 보정).
+  // 0.8 이상은 불투명, 0.2 이하(흐린 배경 찌꺼기)는 투명, 그 사이만 반투명으로 편다.
   for (let i = 0; i < w0 * h0; i++) {
-    const a = Math.round(Math.min(1, Math.max(0, mask[i])) * 255);
+    const a = Math.round(Math.min(1, Math.max(0, (mask[i] - 0.2) / 0.6)) * 255);
     for (let k = 0; k < 3; k++) out[i * 4 + k] = Math.round(rgb[i * 3 + k] * a);
     out[i * 4 + 3] = a;
   }

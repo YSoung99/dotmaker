@@ -286,11 +286,16 @@ export function limitSize(image, max = 2048) {
 // ───────────────────────────── Subject (배경 지우고 캐릭터만)
 export const Subject = {
   /** masked: 배경을 AI로 지운 같은 크기 이미지. 맥판의 Vision 대신 쓰고, 밝은 배경·투명 배경이 아닐 때만 필요하다. */
-  extract(source, masked = null) {
+  extract(source, masked = null, keepTransparentArt = false) {
     let raster = Raster.from(source);
     const grid = raster.grid;
     let hasBackgroundAlpha = false;
     for (let i = 0; i < grid.count; i++) if (grid.edge(i) && A(raster.px[i]) < 32) { hasBackgroundAlpha = true; break; }
+    // 원본 보존: 투명 배경 그림은 떨어진 장식까지 그대로 둔다(거의 안 보이는 알파 1 바닥만 지움).
+    if (keepTransparentArt && hasBackgroundAlpha) {
+      for (let i = 0; i < grid.count; i++) if (A(raster.px[i]) === 1) raster.px[i] = CLEAR;
+      return cropVisible(raster);
+    }
     const removed = removePaleBackdrop(raster);
     if (!removed && !hasBackgroundAlpha) {
       if (!masked) fail('needsMask');
@@ -306,15 +311,21 @@ export const Subject = {
       grid.each8(i, j => { if (A(raster.px[j]) < 48) keep[j] = 1; });
     }
     for (let i = 0; i < grid.count; i++) if (!keep[i]) raster.px[i] = CLEAR;
-    let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
-    for (let i = 0; i < grid.count; i++) {
-      if (A(raster.px[i]) === 0) continue;
-      const x = i % grid.w, y = (i / grid.w) | 0;
-      x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
-    }
-    return raster.crop(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+    return cropVisible(raster);
   },
 };
+
+function cropVisible(raster) {
+  const grid = raster.grid;
+  let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+  for (let i = 0; i < grid.count; i++) {
+    if (A(raster.px[i]) === 0) continue;
+    const x = i % grid.w, y = (i / grid.w) | 0;
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+  }
+  if (x1 < 0) fail('subject');
+  return raster.crop(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+}
 
 function removePaleBackdrop(raster) {
   const grid = raster.grid, px = raster.px;
@@ -348,7 +359,7 @@ function removePaleBackdrop(raster) {
 // ───────────────────────────── 2.0 방식: 축소(Reduced)
 class Acc {
   constructor() { this.r = 0; this.g = 0; this.b = 0; this.weight = 0; }
-  add(p) { const a = A(p); this.r += R(p) * a; this.g += G(p) * a; this.b += B(p) * a; this.weight += a; }
+  add(p, area = 1) { const a = A(p) * area; this.r += R(p) * a; this.g += G(p) * a; this.b += B(p) * a; this.weight += a; }
   get color() {
     if (this.weight <= 0) return BLACK;
     return pack(Math.floor(this.r / this.weight), Math.floor(this.g / this.weight), Math.floor(this.b / this.weight));
@@ -397,7 +408,7 @@ export function reduce(subject, w, h) {
 // method: 'berry' 베리 잉크 · 'basic' 2.0 방식 · 'soft' 원본 색 살림(개선판 '약하게', 색 수는 softColors)
 // softLines: 원본 색 살림에서 선을 1픽셀로 정리(원본에서 선 줄기 찾기) · softVivid: 원본 색 살림에서 채도 25% 올리기
 // softClean: 원본 색 살림에서 바깥 테두리를 순검정 1px로 잇고 색 면 정리(비슷한 색 합치기·혼자 떨어진 점 지우기)
-export const defaultSettings = () => ({ width: 1, boundary: true, transparency: 80, colors: 12, cleanup: 1, method: 'soft', aiLines: false, softColors: 24, softLines: true, softVivid: true, softClean: true });
+export const defaultSettings = () => ({ width: 1, boundary: true, transparency: 80, colors: 12, cleanup: 1, method: 'faithful', aiLines: false, softColors: 24, softLines: true, softVivid: true, softClean: true, crispOutline: false, cleanBlends: false });
 
 class Palette {
   constructor(pixels) {
@@ -2004,17 +2015,22 @@ function oklabToRGB(L, a, b) {
 
 // ───────────────────────────── 앱이 쓰는 입구
 /** 원본(프리멀티플라이 이미지) → 캐릭터 → 축소 */
-export function prepare(original, w, h, masked = null) {
-  const subject = Subject.extract(original, masked);
-  return { subject, reduced: reduce(subject, w, h) };
+export function prepare(original, w, h, masked = null, faithful = false) {
+  const subject = Subject.extract(original, masked, faithful);
+  return { subject, reduced: faithful ? reduceDirect(subject, w, h) : reduce(subject, w, h) };
 }
 export function render(subject, reduced, settings, lines = null) {
+  if (settings.method === 'faithful') return renderFaithful(reduced, settings);
   const guide = settings.aiLines ? lines : null;
   const w = reduced.image.grid.w, h = reduced.image.grid.h;
   if (settings.method === 'soft') return renderSoft(subject, w, h, settings);
   return settings.method === 'basic' ? renderBasic(reduced, settings, guide) : renderBerry(subject, w, h, settings, guide);
 }
 export function dotStatus(settings, dotted) {
+  if (settings.method === 'faithful') {
+    const extras = [settings.cleanBlends && '경계 섞인 색 정리', settings.crispOutline && '바깥 외곽선 1픽셀 검정'].filter(Boolean);
+    return `원본 보존  ·  ${dotted.image.grid.w}×${dotted.image.grid.h} px  ·  투명 PNG${extras.length ? '  ·  ' + extras.join(' · ') : ''}`;
+  }
   const colors = `실제 ${ColorReducer.count(dotted.image)}색`;
   if (settings.method === 'soft') {
     // 가장자리 반투명 칸은 같은 색도 알파에 따라 값이 조금씩 달라 따로 세지 않는다(불투명 칸의 색 수).
@@ -2026,4 +2042,125 @@ export function dotStatus(settings, dotted) {
   const head = dotted.headCount > 0 ? '분홍 머리 영역 감지' : '분홍 머리 영역 미감지';
   const body = dotted.bodyCount > 0 ? '밝은 몸통 영역 감지' : '밝은 몸통 영역 미감지';
   return `${head}  ·  ${body}  ·  ${colors}`;
+}
+
+// ───────────────────────────── 원본 보존 (맥 시험판 DotMaker 100-100에서 옮김)
+// 원본 픽셀이 최종 격자 한 칸에 걸치는 넓이만큼 그대로 평균 낸다(중간 축소 없음).
+
+/** 원본 칸이 목표 칸에 걸치는 길이. 단위는 목표 칸 하나 = source. */
+function overlaps(source, target) {
+  return Array.from({ length: target }, (_, cell) => {
+    const start = cell * source, end = (cell + 1) * source, list = [];
+    for (let pixel = Math.floor(start / target); pixel <= Math.floor((end - 1) / target); pixel++) {
+      list.push([pixel, Math.min(end, (pixel + 1) * target) - Math.max(start, pixel * target)]);
+    }
+    return list;
+  });
+}
+
+export function reduceDirect(subject, w, h) {
+  if (!(w >= 16 && w <= 512 && h >= 16 && h <= 512)) fail('dimensions');
+  const scale = Math.min((w - 4) / subject.grid.w, (h - 4) / subject.grid.h);
+  const sw = Math.max(1, Math.round(subject.grid.w * scale));
+  const sh = Math.max(1, Math.round(subject.grid.h * scale));
+  const x = Math.trunc((w - sw) / 2), y = Math.trunc((h - sh) / 2);
+  const columns = overlaps(subject.grid.w, sw), rows = overlaps(subject.grid.h, sh);
+  const area = subject.grid.w * subject.grid.h, sp = subject.px, sW = subject.grid.w;
+  const output = new Raster(w, h);
+  const cells = Array.from({ length: w * h }, () => ({ fill: CLEAR, ink: BLACK, cover: 0, dark: 0, accent: 0, accentColor: CLEAR }));
+  for (let v = 0; v < sh; v++) {
+    for (let u = 0; u < sw; u++) {
+      const average = new Acc(), fill = new Acc(), ink = new Acc(), accent = new Acc();
+      for (const [row, rowLength] of rows[v]) {
+        for (const [column, columnLength] of columns[u]) {
+          const p = sp[row * sW + column];
+          if (A(p) === 0) continue;
+          const weight = rowLength * columnLength;
+          average.add(p, weight);
+          if (light(p) < 110) ink.add(p, weight); else fill.add(p, weight);
+          if (chroma(p) >= 28 && light(p) >= 100) accent.add(p, weight);
+        }
+      }
+      const cover = Math.floor(average.weight / area);
+      if (!(cover > 0)) continue;
+      const dark = Math.floor(ink.weight * 100 / average.weight);
+      const accentShare = Math.floor(accent.weight * 100 / average.weight);
+      const mean = average.color, fillColor = fill.weight === 0 ? mean : fill.color;
+      const i = (v + y) * w + u + x;
+      cells[i] = { fill: fillColor, ink: ink.color, cover, dark, accent: accentShare, accentColor: accent.color };
+      // 여러 원본 픽셀이 받치는 선은 대비를 되살린다.
+      const p = dark >= 25 && dark < 75 && cover >= 150 ? mixed(mean, ink.color, Math.trunc((dark - 20) / 2)) : mean;
+      output.px[i] = withAlpha(p, cover);
+    }
+  }
+  return { image: output, cells, contentRect: { x, y, w: sw, h: sh } };
+}
+
+/**
+ * 축소 평균 때문에 경계에 생긴 탁한 중간색(빨강+검정 → 자주) 칸마다, 사이에 낀 두 이웃 색 중
+ * 가까운 쪽(near)과 진한 쪽(dark)을 돌려준다. 색 차이가 작은 이웃(부드러운 명암)은 건드리지 않는다.
+ */
+export function blendCandidates(input) {
+  const minGap = 120, maxOff = 28, minAway = 30;
+  const grid = input.grid, px = input.px, picks = new Map();
+  const vec = p => [R(p), G(p), B(p)];
+  const len = v => Math.hypot(v[0], v[1], v[2]);
+  for (let i = 0; i < grid.count; i++) {
+    if (A(px[i]) < 128) continue;
+    const c = vec(px[i]), around = [];
+    grid.each8(i, j => { if (A(px[j]) >= 128) around.push(px[j]); });
+    let best = null;
+    for (let m = 0; m < around.length; m++) {
+      for (let n = m + 1; n < around.length; n++) {
+        const a = vec(around[m]), b = vec(around[n]), ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        const gap = len(ab);
+        if (gap < minGap) continue;
+        const ca = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        if (len(ca) < minAway || len([c[0] - b[0], c[1] - b[1], c[2] - b[2]]) < minAway) continue;
+        const t = (ca[0] * ab[0] + ca[1] * ab[1] + ca[2] * ab[2]) / (gap * gap);
+        if (t < 0.15 || t > 0.85) continue;
+        const off = len([ca[0] - ab[0] * t, ca[1] - ab[1] * t, ca[2] - ab[2] * t]);
+        // 회색처럼 세 색이 거의 일직선이면 동점이 많아, 아주 작은 계산 오차로 순서가 바뀌지 않게 여유를 둔다.
+        if (off <= maxOff && off < (best?.off ?? Infinity) - 1e-6) {
+          const dark = light(around[m]) <= light(around[n]) ? around[m] : around[n];
+          best = { off, near: t < 0.5 ? around[m] : around[n], dark };
+        }
+      }
+    }
+    if (best) picks.set(i, { near: withAlpha(best.near, A(px[i])), dark: withAlpha(best.dark, A(px[i])) });
+  }
+  return picks;
+}
+
+export function cleanBlends(input) {
+  const output = input.clone();
+  for (const [i, pick] of blendCandidates(input)) output.px[i] = pick.near;
+  return output;
+}
+
+/**
+ * 가장 바깥 외곽선을 검은 1픽셀로 다시 긋고 그 바깥의 흐린 칸을 지운다.
+ * 테두리가 대부분 밝은 조각(흰 외곽선)과 조각 맨 아래의 회색(바닥 그림자)은 검정으로 덮지 않는다.
+ */
+export function crispOutline(input) {
+  const grid = input.grid, px = input.px, output = new Raster(grid.w, grid.h);
+  const solid = Array.from(px, p => A(p) >= 128);
+  for (const piece of grid.components(solid)) {
+    const rim = piece.filter(i => { let edge = false; grid.each4(i, j => { if (!solid[j]) edge = true; }); return edge; });
+    const lightRim = rim.filter(i => light(px[i]) >= 170).length * 2 > rim.length;
+    let top = Infinity, bottom = -1;
+    for (const i of piece) { const y = (i / grid.w) | 0; top = Math.min(top, y); bottom = Math.max(bottom, y); }
+    const floor = bottom - Math.max(3, Math.trunc((bottom - top) * 8 / 100));
+    const shadow = i => ((i / grid.w) | 0) >= floor && chroma(px[i]) <= 24 && light(px[i]) >= 45 && light(px[i]) <= 180;
+    const outline = new Set(lightRim ? [] : rim.filter(i => !shadow(i)));
+    for (const i of piece) output.px[i] = outline.has(i) ? BLACK : withAlpha(px[i], 255);
+  }
+  return output;
+}
+
+export function renderFaithful(reduced, settings) {
+  let image = reduced.image;
+  if (settings.cleanBlends) image = cleanBlends(image);
+  if (settings.crispOutline) image = crispOutline(image);
+  return { image };
 }

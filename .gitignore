@@ -7,6 +7,8 @@
 !/install.sh
 !/install.ps1
 !/package.json
+!/package-lock.json
+!/desktop/
 !/src/
 !/dist/
 !/docs/
