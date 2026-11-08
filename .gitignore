@@ -9,6 +9,7 @@
 !/package.json
 !/src/
 !/dist/
+!/docs/
 !/tools/
 /tools/*
 !/tools/build.mjs
