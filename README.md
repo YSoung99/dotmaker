@@ -19,18 +19,26 @@ HTML 파일 하나로 윈도우 · 맥 · 리눅스에서 똑같이 돌아가요
 
 ---
 
-## 🪟 윈도우 프로그램 (3.0.0, 이 브랜치)
+## 💾 설치형 프로그램 (추천 · 3.0.0)
 
-브라우저 없이 설치해서 쓰는 **도트메이커 프로그램**입니다. 맥 앱([dotmaker-mac](https://github.com/YSoung99/dotmaker-mac))과 같은 기능을 씁니다.
+브라우저 없이 설치해서 쓰는 도트메이커입니다. **원본 보존** 방식(결과 크기 100×100 ~ 200×200), 바깥 외곽선 1픽셀 · 경계 섞인 색 정리, **JEV 부위별 진단 · 섞인 색 판정**(직접 고르기)을 씁니다.
 
-- **원본 보존 방식** — 원본 픽셀을 결과 격자 칸마다 그대로 평균 내서 선 굵기와 명암을 살립니다. 결과 크기 100×100 ~ 200×200(10px 단위).
-- **바깥 외곽선 1픽셀 검정 · 경계 섞인 색 정리** — 체크박스로 켜고 끕니다.
-- **JEV 부위별 진단 / 섞인 색 판정** — LLM Gateway 판정 모델이 선 굵기·머리색·투명 테두리·외곽선·섞인 색을 원본과 비교해 후보를 고르고, 항목마다 직접 고른 뒤 **선택 적용**합니다. API 키는 윈도우 암호화 저장소에 보관합니다.
-- 배경 분리 AI(anime-seg)는 처음 쓸 때 한 번 받습니다(약 168MB, 끊기면 이어받기).
+| 운영체제 | 받기 | 설치 방법 |
+|---|---|---|
+| **윈도우** 10/11 (64비트) | [DotMaker-3.0.0-win-x64.exe](https://github.com/YSoung99/dotmaker/releases/download/v3.0.0-windows/DotMaker-3.0.0-win-x64.exe) | 받은 파일을 실행 → 설치 위치 고르고 **설치**. "Windows의 PC 보호" 창이 뜨면 **추가 정보 → 실행** |
+| **맥** (Apple Silicon, macOS 14 이상) | [DotMaker-mac-3.0.0-arm64.zip](https://github.com/YSoung99/dotmaker-mac/releases/download/v3.0.0/DotMaker-mac-3.0.0-arm64.zip) | 압축을 풀어 앱을 **응용 프로그램** 폴더로 옮긴 뒤, 터미널에서 아래 명령을 한 번 실행 |
 
-**설치:** [Releases](https://github.com/YSoung99/dotmaker/releases)에서 `DotMaker-3.0.0-win-x64.exe`를 받아 실행하세요. 개발자 서명이 없어서 "Windows의 PC 보호" 창이 뜨면 **추가 정보 → 실행**을 누르면 됩니다.
+```sh
+xattr -dr com.apple.quarantine "/Applications/도트메이커 JEV 부위별 진단 시험.app"
+```
 
-**소스에서 만들기:** `npm install` 뒤 `npm start`(실행) 또는 `npm run dist:win`(설치 파일).
+- 윈도우 프로그램 소스: 이 저장소의 [`desktop-app` 브랜치](https://github.com/YSoung99/dotmaker/tree/desktop-app) · 맥 앱 소스: [YSoung99/dotmaker-mac](https://github.com/YSoung99/dotmaker-mac)
+- JEV를 쓰려면 프로그램의 **JEV 설정**에 [LLM Gateway](https://llmgateway.io) API 키를 넣으세요(판정할 때 그림이 LLM Gateway로 전송되고 요금은 내 계정에 청구).
+- 색 배경 그림의 배경 분리 AI는 윈도우판은 처음 한 번 받고(약 168MB), 맥 앱에는 들어 있습니다.
+
+> 아래는 브라우저로 여는 **웹 버전(2.9.0)** 안내입니다.
+
+---
 
 ## ✨ 특징
 
