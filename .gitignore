@@ -1,0 +1,15 @@
+# 공개할 것만 남긴다(시험 그림·비교 결과·AI 파일·개발 기록은 이 PC에만).
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/LICENSE
+!/install.sh
+!/install.ps1
+!/package.json
+!/src/
+!/dist/
+!/tools/
+/tools/*
+!/tools/build.mjs
+.DS_Store

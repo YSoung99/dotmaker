@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>도트메이커</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f4f3f1;
+  --panel: #ffffff;
+  --text: #1d1c1a;
+  --muted: #6c6a66;
+  --line: #dddad5;
+  --control: #ffffff;
+  --control-hover: #f1efec;
+  --accent: #d94f8a;
+  --accent-text: #ffffff;
+  --checker-a: #f6f5f3;
+  --checker-b: #e9e7e3;
+  --error: #c4322f;
+  --focus: #2f6fd6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1b1a;
+    --panel: #252422;
+    --text: #ecebe8;
+    --muted: #a3a09a;
+    --line: #3b3936;
+    --control: #2f2e2b;
+    --control-hover: #393734;
+    --accent: #e8679f;
+    --checker-a: #2b2a28;
+    --checker-b: #34322f;
+    --error: #ff7b72;
+    --focus: #79a8ff;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 "Pretendard", "Malgun Gothic", "맑은 고딕", system-ui, sans-serif;
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+}
+button, input, select { font: inherit; color: inherit; }
+button, select, input[type=text] {
+  background: var(--control);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 5px 12px;
+  min-height: 32px;
+}
+button { cursor: pointer; }
+button:hover:not(:disabled), select:hover:not(:disabled) { background: var(--control-hover); }
+button:disabled, input:disabled, select:disabled { opacity: .45; cursor: default; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+input[type=text] { width: 64px; text-align: center; padding: 5px 6px; }
+.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.06); }
+.muted { color: var(--muted); }
+
+.toolbar { display: flex; align-items: center; gap: 12px; padding: 16px 20px 0; flex-wrap: wrap; }
+.toolbar .name { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.toolbar label { display: flex; align-items: center; gap: 6px; }
+.brand { font-weight: 700; letter-spacing: -.01em; }
+.brand small { font-weight: 400; color: var(--muted); margin-left: 6px; }
+
+.tabs { display: flex; gap: 4px; padding: 14px 20px 0; border-bottom: 1px solid var(--line); }
+.tabs button { border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; background: transparent; padding: 7px 18px; margin-bottom: -1px; }
+.tabs button[aria-selected=true] { background: var(--panel); border-color: var(--line); font-weight: 600; }
+
+main { flex: 1; display: flex; min-height: 0; background: var(--panel); }
+.screen { flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 16px 20px 18px; min-height: 0; }
+.screen > p { margin: 0; }
+.stack { display: flex; flex-direction: column; gap: 9px; }
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.spacer { flex: 1; }
+.field { display: flex; align-items: center; gap: 8px; }
+.note { margin: 0; color: var(--muted); font-size: 12.5px; }
+.toggle { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+.toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
+
+.segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.segmented button { border: none; border-radius: 0; border-left: 1px solid var(--line); background: var(--control); padding: 5px 14px; }
+.segmented button:first-child { border-left: none; }
+.segmented button[aria-checked=true] { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+.stepper { display: inline-flex; align-items: center; gap: 6px; }
+.stepper span { min-width: 92px; }
+.stepper button { width: 32px; padding: 0; }
+.stepper.disabled span { opacity: .45; }
+
+.previews { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 240px; }
+.preview { display: flex; flex-direction: column; gap: 6px; min-height: 0; min-width: 0; }
+.preview header { display: flex; align-items: baseline; gap: 8px; }
+.preview h3 { margin: 0; font-size: 14px; }
+.preview .size { margin-left: auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.frame {
+  flex: 1; min-height: 0; position: relative; border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+  background: repeating-conic-gradient(var(--checker-a) 0 25%, var(--checker-b) 0 50%) 0 0 / 24px 24px;
+}
+.frame canvas { position: absolute; inset: 15px; width: calc(100% - 30px); height: calc(100% - 30px); object-fit: contain; }
+.frame canvas.pixelated { image-rendering: pixelated; }
+
+.empty {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center;
+  border: 1.5px dashed var(--line); border-radius: 10px; background: transparent; color: var(--muted); padding: 24px; min-height: 240px;
+}
+.empty strong { color: var(--text); font-size: 16px; }
+body.dragging .empty.drop, body.dragging .frame { border-color: var(--accent); }
+
+.status { margin: 0; min-height: 21px; color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; user-select: text; }
+.status.error { color: var(--error); }
+.spinner { width: 13px; height: 13px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+input.key { width: 320px; text-align: left; }
+input.wide { width: min(520px, 100%); text-align: left; }
+.screen select { min-height: 32px; }
+.strip { display: flex; gap: 4px; overflow-x: auto; padding: 4px 0; }
+.strip canvas { width: 48px; height: 48px; object-fit: contain; border: 1px solid var(--line); border-radius: 4px; cursor: pointer;
+  background: repeating-conic-gradient(var(--checker-a) 0 25%, var(--checker-b) 0 50%) 0 0 / 12px 12px; }
+.screen a { color: var(--focus); }
+.help { overflow-y: auto; max-width: 980px; }
+.help section { display: flex; flex-direction: column; gap: 8px; }
+.help h2 { font-size: 16px; margin: 6px 0 0; }
+.help p, .help ul { margin: 0; }
+.help ul { padding-left: 20px; display: flex; flex-direction: column; gap: 5px; }
+.help code, .help kbd { font: 12.5px/1.4 ui-monospace, Consolas, "D2Coding", monospace; background: var(--control-hover); border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; }
+.help a { color: var(--focus); }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+.files { border-collapse: collapse; width: 100%; font-size: 13px; }
+.files th, .files td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.files tr:last-child td { border-bottom: none; }
+.files th { color: var(--muted); font-weight: 600; background: var(--bg); }
+.files .url { min-width: 260px; font-size: 12px; word-break: break-all; }
+.files .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.files .ok { color: #2e8b57; font-weight: 600; white-space: nowrap; }
+.files .missing { color: var(--muted); white-space: nowrap; }
+@media (prefers-color-scheme: dark) { .files .ok { color: #6fd39b; } }
+
+@media (max-width: 640px) {
+  .previews { grid-template-columns: 1fr; }
+  .toolbar, .tabs, .screen { padding-left: 16px; padding-right: 16px; }
+}
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <span class="brand">도트메이커<small id="version"></small></span>
+  <button id="open" type="button">이미지 열기…</button>
+  <span id="file-name" class="name"></span>
+  <label>저장 배율
+    <select id="scale" title="도트 그림을 정수배로 키워 저장합니다(번짐 없음).">
+      <option value="1">1배</option><option value="2">2배</option><option value="4">4배</option><option value="8">8배</option>
+    </select>
+  </label>
+  <button id="save" type="button" disabled>PNG 저장…</button>
+  <input id="file" type="file" accept="image/*" hidden>
+</div>
+<nav id="tabs" class="tabs" role="tablist" aria-label="단계">
+  <button type="button" role="tab" data-stage="reduce">축소</button>
+  <button type="button" role="tab" data-stage="dot">도트화</button>
+  <button type="button" role="tab" data-stage="repair">AI 보정</button>
+  <button type="button" role="tab" data-stage="lab">PixelLab 작업실</button>
+  <button type="button" role="tab" data-stage="help">설명서</button>
+</nav>
+<main id="panel" role="tabpanel"></main>
+<script type="text/plain" id="worker-src">
+/*AI*/
+/*WORKER*/
+</script>
+<script type="module" data-app>
+/*SHARED-START*/
+/*CORE*/
+/*FILES*/
+/*SHARED-END*/
+/*APP*/
+</script>
+</body>
+</html>
