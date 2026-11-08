@@ -3,7 +3,6 @@ const VERSION = '3.0.0';
 const STAGES = {
   dot: { name: '도트화', instruction: '머리와 몸통을 구분해 검은 윤곽과 몸통 경계색을 적용합니다.' },
   repair: { name: 'AI 보정', instruction: '클라우드 AI(PixelLab·Gemini·OpenAI)에 캐릭터를 보내 도트 그림으로 다시 그립니다. 쓰려면 그 서비스의 내 API 키가 필요합니다.' },
-  lab: { name: 'PixelLab' },
   help: { name: '설명서' },
 };
 
@@ -224,13 +223,11 @@ function redot() {
 }
 
 function result(stage = state.stage) {
-  if (stage === 'lab') return labResultPicture();
   if (stage === 'repair' && !state.product) return state.cloud.result?.final ?? null;
   if (!state.product) return null;
   if (stage === 'reduce') return state.product.reduced;
   if (stage === 'dot') return state.product.dotted;
   if (stage === 'repair') return state.cloud.result?.final ?? null;
-  if (stage === 'lab') return labResultPicture();
   return null;
 }
 
@@ -441,7 +438,7 @@ function controls(stage) {
   return null;
 }
 
-/** API 키 줄: 저장돼 있으면 끝 4자리와 바꾸기·지우기, 없으면 입력칸. AI 보정 탭과 PixelLab 작업실이 같이 쓴다. */
+/** API 키 줄: 저장돼 있으면 끝 4자리와 바꾸기·지우기, 없으면 입력칸. AI 보정 탭이 쓴다. */
 function keyRow(id) {
   const c = state.cloud, info = CLOUD[id], key = cloudKey.get(id);
   if (key && c.editingKey !== id) {
@@ -462,6 +459,20 @@ function keyRow(id) {
   return row(input, el('button', { type: 'button', textContent: '키 저장', onclick: saveKey }),
     c.editingKey === id && el('button', { type: 'button', textContent: '취소', onclick: () => setCloud('editingKey', false) }),
     el('a', { href: info.keyPage, target: '_blank', rel: 'noopener', textContent: '키 발급 페이지 ↗' }));
+}
+
+async function loadPictureFile(file) {
+  const image = await decode(file);
+  return { w: image.w, h: image.h, bytes: Raster.fromPremultiplied(image.data, image.w, image.h).straightBytes() };
+}
+function pickFile(onPicture) {
+  const input = el('input', { type: 'file', accept: 'image/*' });
+  input.onchange = async () => {
+    const file = input.files[0];
+    try { if (file) onPicture(await loadPictureFile(file), file.name); }
+    catch (error) { state.error = error.message; update(); }
+  };
+  input.click();
 }
 
 /** AI 보정에 보낼 그림: 도트화 탭 이미지(다시 그리기는 캐릭터 원본, 다듬기는 도트화 결과) 또는 따로 넣은 그림 */
@@ -522,15 +533,12 @@ function statusLine(stage) {
     status.textContent = state.product.status;
   } else if (stage === 'repair' && state.cloud.result) {
     status.textContent = state.cloud.result.status;
-  } else if (stage === 'lab' && state.lab.result) {
-    status.textContent = state.lab.result.status;
   }
   return status;
 }
 
 function screen(stage) {
   if (stage === 'help') return helpScreen();
-  if (stage === 'lab') return labScreen();
   const instruction = stage === 'dot' && state.settings.method === 'faithful'
     ? '원본 한 장을 열면 선 굵기와 명암을 살려 투명 PNG 크기에 맞춥니다. 원본에서 바로 격자 칸마다 색을 읽습니다.'
     : stage === 'dot' && state.settings.method === 'soft'
@@ -608,14 +616,6 @@ function helpScreen() {
       '<b>Gemini</b>(나노 바나나 2.1) · <b>OpenAI</b>(GPT Image 2.5): 도트 느낌의 큰 그림을 받아 지금 도트화 설정으로 한 번 더 도트화합니다. 약 $0.034/장, $0.01~0.05/장.',
       '키 발급: PixelLab <code>pixellab.ai</code> 계정 · Gemini <code>aistudio.google.com/apikey</code> · OpenAI <code>platform.openai.com/api-keys</code>. 요금은 그 키의 계정에 청구됩니다(무료 사용량 없음).',
       '실행할 때마다 <b>캐릭터 그림이 그 서비스 서버로 전송</b>됩니다. 보내기 전에 받는 곳과 요금을 묻습니다. 키는 이 브라우저에만 저장되고, \'키 지우기\'로 지울 수 있습니다.',
-    ])),
-    section('PixelLab 작업실', list([
-      '<b>작업 그림</b>을 가져온 뒤(도트화 결과·AI 보정 결과·그림 파일) 도구를 고르고 실행합니다. 결과가 마음에 들면 <b>결과를 작업 그림으로 쓰기</b>로 이어서 다른 도구를 씁니다. <b>되돌리기</b>로 앞 단계로 돌아갑니다.',
-      '<b>이미지 → 도트 Pro</b>: 캐릭터 원본을 고품질 도트로(크기는 PixelLab이 정함, \'캔버스에 맞춰 작업 그림으로\'로 크기 맞춤). Pro Flash는 1장에 생성 6회.',
-      '<b>글로 고치기</b> · <b>부분 다시 그리기</b>(작업 그림 위에 붓으로 칠한 곳만, Shift+칠하기는 지우기) · <b>색 줄이기</b> · <b>배경 지우기</b> · <b>크기 바꾸기</b> · <b>원래 칸 크기로(unzoom)</b>.',
-      '<b>8방향 돌리기</b> · <b>동작 애니메이션</b>(예: walking): 여러 프레임이 나오고 움직이는 미리보기로 보입니다. PNG 저장은 스프라이트 시트(가로로 이어 붙임)입니다. 프레임을 누르면 그 프레임이 작업 그림이 됩니다.',
-      '<b>옷 입히기</b>: 마지막 애니메이션·8방향 프레임에 참고 그림의 옷·모습을 입힙니다(프레임 크기에 따라 한 번에 3~15장).',
-      '설명 문장은 영어가 더 잘 통합니다. 요금은 PixelLab 생성 횟수·크레딧에서 차감되고 결과에 표시됩니다.',
     ])),
     section('문제 해결', list([
       '<b>글자만 가득한 창이 뜸</b>: 텍스트 편집기로 열린 것입니다. 파일을 오른쪽 클릭 → 연결 프로그램 → 크롬·엣지로 여세요.',
@@ -697,9 +697,9 @@ document.addEventListener('drop', event => {
   document.body.classList.remove('dragging');
   const file = [...(event.dataTransfer?.files ?? [])].find(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name));
   if (!file) return;
-  // AI 보정·작업실 탭에서는 그 탭의 그림으로 넣고, 다른 탭에서는 도트화할 원본으로 연다.
-  if (state.stage === 'repair' || state.stage === 'lab') {
-    loadPictureFile(file).then(picture => (state.stage === 'repair' ? setCloudInput(picture, file.name) : useAsWork(picture)))
+  // AI 보정 탭에서는 그 탭의 그림으로 넣고, 다른 탭에서는 도트화할 원본으로 연다.
+  if (state.stage === 'repair') {
+    loadPictureFile(file).then(picture => setCloudInput(picture, file.name))
       .catch(error => { state.error = error.message; update(); });
   } else open(file);
 });
