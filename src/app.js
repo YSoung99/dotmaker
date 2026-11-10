@@ -1,5 +1,5 @@
 // 도트메이커 웹 버전 화면. 변환·AI는 작업자(worker.js)가 하고, 여기서는 열기·설정·미리보기·저장·설명서만 한다.
-const VERSION = '3.1.0';
+const VERSION = '3.2.0';
 const STAGES = {
   dot: { name: '도트화', instruction: '머리와 몸통을 구분해 검은 윤곽과 몸통 경계색을 적용합니다.' },
   repair: { name: 'AI 보정', instruction: '클라우드 AI(PixelLab·Gemini·OpenAI)에 캐릭터를 보내 도트 그림으로 다시 그립니다. 쓰려면 그 서비스의 내 API 키가 필요합니다.' },
@@ -424,8 +424,10 @@ function controls(stage) {
     const methods = segmented([['faithful', '원본 보존'], ['soft', '원본 색 살림'], ['berry', '베리 잉크'], ['basic', '2.0 방식']], s.method, v => setSetting('method', v), off, '도트화 방식');
     if (s.method === 'faithful') {
       return el('div', { className: 'stack' }, sizeRow, row(methods),
-        row(toggle('바깥 외곽선 1픽셀 검정', s.crispOutline, v => setSetting('crispOutline', v), off,
-          '가장 바깥 외곽선을 검은 1픽셀로 또렷하게 긋고 그 바깥의 흐린 칸을 지웁니다. 흰 외곽선 장식과 바닥 그림자는 그대로 둡니다.'),
+        row(toggle('바깥 외곽선 1픽셀(원본 선 색)', s.crispOutline, v => setSetting('crispOutline', v), off,
+          '투명 배경 바로 앞 가장 바깥 칸만, 원본 그 자리에 선이 있으면 원본 선 색으로 칠하고 그 바깥의 흐린 칸을 지웁니다. 흰 외곽선 장식과 바닥 그림자는 그대로 둡니다.'),
+        toggle('원본 색 맞추기', s.snapColors, v => setSetting('snapColors', v), off,
+          '축소하면서 생긴 탁한 중간색 대신, 그 칸 원본에 실제로 있는 가장 가까운 색을 넣습니다.'),
         toggle('경계 섞인 색 정리', s.cleanBlends, v => setSetting('cleanBlends', v), off,
           '축소하면서 경계에 생긴 탁한 중간색(빨강+검정 → 자주 등)을 가까운 원래 색으로 바꿉니다. 부드러운 명암은 건드리지 않습니다.')),
         jevControls());

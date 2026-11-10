@@ -1226,7 +1226,7 @@ function reduce(subject, w, h) {
 // method: 'berry' 베리 잉크 · 'basic' 2.0 방식 · 'soft' 원본 색 살림(개선판 '약하게', 색 수는 softColors)
 // softLines: 원본 색 살림에서 선을 1픽셀로 정리(원본에서 선 줄기 찾기) · softVivid: 원본 색 살림에서 채도 25% 올리기
 // softClean: 원본 색 살림에서 바깥 테두리를 순검정 1px로 잇고 색 면 정리(비슷한 색 합치기·혼자 떨어진 점 지우기)
-const defaultSettings = () => ({ width: 1, boundary: true, transparency: 80, colors: 12, cleanup: 1, method: 'faithful', aiLines: false, softColors: 24, softLines: true, softVivid: true, softClean: true, crispOutline: false, cleanBlends: false, upscale: 'auto' });
+const defaultSettings = () => ({ width: 1, boundary: true, transparency: 80, colors: 12, cleanup: 1, method: 'faithful', aiLines: false, softColors: 24, softLines: true, softVivid: true, softClean: true, crispOutline: false, cleanBlends: false, snapColors: false, upscale: 'auto' });
 
 class Palette {
   constructor(pixels) {
@@ -2838,7 +2838,7 @@ function prepare(original, w, h, masked = null, faithful = false) {
   return { subject, reduced: faithful ? reduceDirect(subject, w, h) : reduce(subject, w, h) };
 }
 function render(subject, reduced, settings, lines = null) {
-  if (settings.method === 'faithful') return renderFaithful(reduced, settings);
+  if (settings.method === 'faithful') return renderFaithful(reduced, settings, subject);
   const guide = settings.aiLines ? lines : null;
   const w = reduced.image.grid.w, h = reduced.image.grid.h;
   if (settings.method === 'soft') return renderSoft(subject, w, h, settings);
@@ -2846,7 +2846,7 @@ function render(subject, reduced, settings, lines = null) {
 }
 function dotStatus(settings, dotted) {
   if (settings.method === 'faithful') {
-    const extras = [settings.cleanBlends && '경계 섞인 색 정리', settings.crispOutline && '바깥 외곽선 1픽셀 검정'].filter(Boolean);
+    const extras = [settings.snapColors && '원본 색 맞추기', settings.cleanBlends && '경계 섞인 색 정리', settings.crispOutline && '바깥 외곽선 원본 선 색'].filter(Boolean);
     return `원본 보존  ·  ${dotted.image.grid.w}×${dotted.image.grid.h} px  ·  투명 PNG${extras.length ? '  ·  ' + extras.join(' · ') : ''}`;
   }
   const colors = `실제 ${ColorReducer.count(dotted.image)}색`;
@@ -2960,7 +2960,37 @@ function cleanBlends(input) {
  * 가장 바깥 외곽선을 검은 1픽셀로 다시 긋고 그 바깥의 흐린 칸을 지운다.
  * 테두리가 대부분 밝은 조각(흰 외곽선)과 조각 맨 아래의 회색(바닥 그림자)은 검정으로 덮지 않는다.
  */
-function crispOutline(input) {
+/** 원본 색 맞추기: 축소 평균으로 생긴 중간색 대신, 그 칸(둘레 반 칸 포함) 원본에 실제로 있는 가장 가까운 색을 넣는다. */
+function snapColors(input, reduced, subject) {
+  const output = input.clone(), w = input.grid.w;
+  const { x: ox, y: oy, w: sw, h: sh } = reduced.contentRect;
+  const W = subject.grid.w, H = subject.grid.h, sp = subject.px;
+  const cw = W / sw, ch = H / sh, mx = Math.max(1, Math.trunc(cw / 2)), my = Math.max(1, Math.trunc(ch / 2));
+  for (let v = 0; v < sh; v++) {
+    const y0 = Math.max(0, Math.trunc(v * ch) - my), y1 = Math.min(H, Math.trunc((v + 1) * ch) + my);
+    for (let u = 0; u < sw; u++) {
+      const i = (v + oy) * w + u + ox, p = input.px[i];
+      if (A(p) < 128) continue;
+      const x0 = Math.max(0, Math.trunc(u * cw) - mx), x1 = Math.min(W, Math.trunc((u + 1) * cw) + mx);
+      let best = null, bestDistance = Infinity;
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+        const q = sp[y * W + x];
+        if (A(q) < 128) continue;
+        const d = distance(p, q);
+        if (d < bestDistance) { bestDistance = d; best = q; }
+      }
+      if (best !== null) output.px[i] = withAlpha(best, A(p));
+    }
+  }
+  return output;
+}
+
+/**
+ * 가장 바깥 실루엣을 1픽셀 선으로 또렷하게 긋고 그 바깥의 흐린 칸을 지운다.
+ * cells가 있으면 원본 그 자리에 선이 있는 칸만 원본 선 색으로(없는 칸은 제 색 그대로), 없으면 전부 검정.
+ * 바깥 테두리가 대부분 밝은 조각(일부러 그린 흰 외곽선)은 제 색을 둔다.
+ */
+function crispOutline(input, cells = null) {
   const grid = input.grid, px = input.px, output = new Raster(grid.w, grid.h);
   const solid = Array.from(px, p => A(p) >= 128);
   for (const piece of grid.components(solid)) {
@@ -2971,15 +3001,19 @@ function crispOutline(input) {
     const floor = bottom - Math.max(3, Math.trunc((bottom - top) * 8 / 100));
     const shadow = i => ((i / grid.w) | 0) >= floor && chroma(px[i]) <= 24 && light(px[i]) >= 45 && light(px[i]) <= 180;
     const outline = new Set(lightRim ? [] : rim.filter(i => !shadow(i)));
-    for (const i of piece) output.px[i] = outline.has(i) ? BLACK : withAlpha(px[i], 255);
+    for (const i of piece) {
+      const line = !outline.has(i) ? null : !cells ? BLACK : cells[i].dark >= 5 ? cells[i].ink : null;
+      output.px[i] = withAlpha(line ?? px[i], 255);
+    }
   }
   return output;
 }
 
-function renderFaithful(reduced, settings) {
+function renderFaithful(reduced, settings, subject) {
   let image = reduced.image;
+  if (settings.snapColors) image = snapColors(image, reduced, subject);
   if (settings.cleanBlends) image = cleanBlends(image);
-  if (settings.crispOutline) image = crispOutline(image);
+  if (settings.crispOutline) image = crispOutline(image, reduced.cells);
   return { image };
 }
 
@@ -3404,7 +3438,7 @@ function jevControls() {
 }
 
 // 도트메이커 웹 버전 화면. 변환·AI는 작업자(worker.js)가 하고, 여기서는 열기·설정·미리보기·저장·설명서만 한다.
-const VERSION = '3.1.0';
+const VERSION = '3.2.0';
 const STAGES = {
   dot: { name: '도트화', instruction: '머리와 몸통을 구분해 검은 윤곽과 몸통 경계색을 적용합니다.' },
   repair: { name: 'AI 보정', instruction: '클라우드 AI(PixelLab·Gemini·OpenAI)에 캐릭터를 보내 도트 그림으로 다시 그립니다. 쓰려면 그 서비스의 내 API 키가 필요합니다.' },
@@ -3829,8 +3863,10 @@ function controls(stage) {
     const methods = segmented([['faithful', '원본 보존'], ['soft', '원본 색 살림'], ['berry', '베리 잉크'], ['basic', '2.0 방식']], s.method, v => setSetting('method', v), off, '도트화 방식');
     if (s.method === 'faithful') {
       return el('div', { className: 'stack' }, sizeRow, row(methods),
-        row(toggle('바깥 외곽선 1픽셀 검정', s.crispOutline, v => setSetting('crispOutline', v), off,
-          '가장 바깥 외곽선을 검은 1픽셀로 또렷하게 긋고 그 바깥의 흐린 칸을 지웁니다. 흰 외곽선 장식과 바닥 그림자는 그대로 둡니다.'),
+        row(toggle('바깥 외곽선 1픽셀(원본 선 색)', s.crispOutline, v => setSetting('crispOutline', v), off,
+          '투명 배경 바로 앞 가장 바깥 칸만, 원본 그 자리에 선이 있으면 원본 선 색으로 칠하고 그 바깥의 흐린 칸을 지웁니다. 흰 외곽선 장식과 바닥 그림자는 그대로 둡니다.'),
+        toggle('원본 색 맞추기', s.snapColors, v => setSetting('snapColors', v), off,
+          '축소하면서 생긴 탁한 중간색 대신, 그 칸 원본에 실제로 있는 가장 가까운 색을 넣습니다.'),
         toggle('경계 섞인 색 정리', s.cleanBlends, v => setSetting('cleanBlends', v), off,
           '축소하면서 경계에 생긴 탁한 중간색(빨강+검정 → 자주 등)을 가까운 원래 색으로 바꿉니다. 부드러운 명암은 건드리지 않습니다.')),
         jevControls());
