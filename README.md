@@ -14,8 +14,8 @@
 
 | 운영체제 | 받기 | 설치 방법 |
 |---|---|---|
-| **윈도우** 10/11 (64비트) | [DotMaker-3.1.0-win-x64.exe](https://github.com/YSoung99/dotmaker/releases/download/v3.1.0-windows/DotMaker-3.1.0-win-x64.exe) | 받은 파일을 실행 → 설치 위치 고르고 **설치**. "Windows의 PC 보호" 창이 뜨면 **추가 정보 → 실행** |
-| **맥** (Apple Silicon, macOS 14 이상) | [DotMaker-mac-3.1.0-arm64.zip](https://github.com/YSoung99/dotmaker-mac/releases/download/v3.1.0/DotMaker-mac-3.1.0-arm64.zip) | 압축을 풀어 앱을 **응용 프로그램** 폴더로 옮긴 뒤, 터미널에서 아래 명령을 한 번 실행 |
+| **윈도우** 10/11 (64비트) | [DotMaker-3.2.0-win-x64.exe](https://github.com/YSoung99/dotmaker/releases/download/v3.2.0-windows/DotMaker-3.2.0-win-x64.exe) | 받은 파일을 실행 → 설치 위치 고르고 **설치**. "Windows의 PC 보호" 창이 뜨면 **추가 정보 → 실행** |
+| **맥** (Apple Silicon, macOS 14 이상) | [DotMaker-mac-3.2.0-arm64.zip](https://github.com/YSoung99/dotmaker-mac/releases/download/v3.2.0/DotMaker-mac-3.2.0-arm64.zip) | 압축을 풀어 앱을 **응용 프로그램** 폴더로 옮긴 뒤, 터미널에서 아래 명령을 한 번 실행 |
 
 ```sh
 xattr -dr com.apple.quarantine "/Applications/도트메이커 JEV 부위별 진단 시험.app"
