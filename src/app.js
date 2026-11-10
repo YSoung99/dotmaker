@@ -1,5 +1,5 @@
 // 도트메이커 웹 버전 화면. 변환·AI는 작업자(worker.js)가 하고, 여기서는 열기·설정·미리보기·저장·설명서만 한다.
-const VERSION = '3.2.0';
+const VERSION = '3.2.1';
 const STAGES = {
   dot: { name: '도트화', instruction: '머리와 몸통을 구분해 검은 윤곽과 몸통 경계색을 적용합니다.' },
   repair: { name: 'AI 보정', instruction: '클라우드 AI(PixelLab·Gemini·OpenAI)에 캐릭터를 보내 도트 그림으로 다시 그립니다. 쓰려면 그 서비스의 내 API 키가 필요합니다.' },
@@ -178,10 +178,10 @@ function dimensions() {
 let submittedSettings = null;
 const applyProduct = data => { state.product = { reduced: data.reduced, dotted: data.dotted, status: data.status }; };
 
-// 설치형 프로그램: 함께 들어 있는 AI 업스케일 모델을 처음 한 번 AI 파일 저장소에 넣어 둔다.
+// 설치형 프로그램: 함께 들어 있는 AI 실행 도구·AI 업스케일 모델을 처음 한 번 AI 파일 저장소에 넣어 둔다.
 const bundledModels = (async () => {
   if (!window.dotmakerDesktop?.readModel) return;
-  for (const id of ['esr6b', 'esrV3']) {
+  for (const id of ['ortJs', 'ortMjs', 'ortWasm', 'esr6b', 'esrV3']) {
     if (await fileStore.get(id)) continue;
     const bytes = await window.dotmakerDesktop.readModel(id).catch(() => null);
     if (bytes) await fileStore.put(id, new Uint8Array(bytes)).catch(() => {});

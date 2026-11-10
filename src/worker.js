@@ -1,6 +1,6 @@
 // 작업자(Web Worker): 변환과 AI를 화면과 따로 돌려 처리 중에도 창이 멈추지 않게 한다.
 // 일은 들어온 순서대로 하나씩 한다. 원본·캐릭터·선 지도는 여기 두고, 화면에는 결과 그림만 보낸다.
-let current = null; // { raw, upscaled, original, masked, subject, reduced, lines, faithful }
+let current = null; // { raw, wanted, upscaled, skipped, original, masked, subject, reduced, lines, faithful }
 
 const picture = raster => ({ w: raster.grid.w, h: raster.grid.h, bytes: raster.straightBytes() });
 
@@ -18,7 +18,8 @@ function finish(id, settings) {
   const parts = settings.method === 'faithful' ? faithfulParts() : current;
   const dotted = render(parts.subject, parts.reduced, settings, current.lines);
   const reduced = picture(parts.reduced.image), dot = picture(dotted.image);
-  const sharpened = current.upscaled ? ` · AI 업스케일 ${current.upscaled === 'esr6b' ? '6B' : 'v3'}` : '';
+  const sharpened = current.upscaled ? ` · AI 업스케일 ${current.upscaled === 'esr6b' ? '6B' : 'v3'}`
+    : current.skipped ? ` · AI 업스케일 건너뜀(${current.skipped})` : '';
   self.postMessage({ id, type: 'done', reduced, dotted: dot, status: dotStatus(settings, dotted) + sharpened },
     [reduced.bytes.buffer, dot.bytes.buffer]);
 }
@@ -32,7 +33,7 @@ async function handle(job) {
       finish(job.id, settings);
     } else if (job.type === 'resize') {
       // 결과 크기가 바뀌면 '자동' AI 업스케일을 쓸지가 달라질 수 있다.
-      if (upscaleModel(current.raw, job.settings.upscale, Math.max(job.w, job.h)) !== current.upscaled) {
+      if (upscaleModel(current.raw, job.settings.upscale, Math.max(job.w, job.h)) !== current.wanted) {
         current = await load(current.raw, job.w, job.h, job.settings, progress);
       } else {
         current = { ...current, reduced: reduce(current.subject, job.w, job.h) };
@@ -40,7 +41,7 @@ async function handle(job) {
       finish(job.id, job.settings);
     } else if (job.type === 'redot') {
       const { w, h } = current.reduced.image.grid;
-      if (upscaleModel(current.raw, job.settings.upscale, Math.max(w, h)) !== current.upscaled) {
+      if (upscaleModel(current.raw, job.settings.upscale, Math.max(w, h)) !== current.wanted) {
         current = await load(current.raw, w, h, job.settings, progress);
       } else if (wantsLines(job.settings) && !current.lines) {
         current.lines = await extractLines(current.subject, progress);
@@ -65,8 +66,8 @@ async function handle(job) {
         result = raster;
         status = `AI 도트 그림 · 배경 지움 · ${raster.grid.w}×${raster.grid.h}`;
       } else {
-        const model = upscaleModel(image, settings.upscale, Math.max(w, h));
-        const prepared = await prepareAny(model ? await upscaleImage(image, model, progress) : image, w, h, progress);
+        const { image: source } = await tryUpscale(image, upscaleModel(image, settings.upscale, Math.max(w, h)), progress);
+        const prepared = await prepareAny(source, w, h, progress);
         const lines = wantsLines(settings) ? await extractLines(prepared.subject, progress) : null;
         const dotted = render(prepared.subject, prepared.reduced, settings, lines);
         result = dotted.image;
@@ -84,11 +85,22 @@ async function handle(job) {
 
 /** 원본 → (AI 업스케일) → 캐릭터 분리·축소·선 지도. raw는 처음 연 원본이고, AI 업스케일 설정이 바뀌면 여기서 다시 시작한다. */
 async function load(raw, w, h, settings, progress) {
-  const upscaled = upscaleModel(raw, settings.upscale, Math.max(w, h));
-  const original = upscaled ? await upscaleImage(raw, upscaled, progress) : raw;
+  const wanted = upscaleModel(raw, settings.upscale, Math.max(w, h));
+  const { image: original, upscaled, skipped } = await tryUpscale(raw, wanted, progress);
   const prepared = await prepareAny(original, w, h, progress);
   const lines = wantsLines(settings) ? await extractLines(prepared.subject, progress) : null;
-  return { raw, upscaled, original, masked: prepared.masked, subject: prepared.subject, reduced: prepared.reduced, lines, faithful: null };
+  return { raw, wanted, upscaled, skipped, original, masked: prepared.masked, subject: prepared.subject, reduced: prepared.reduced, lines, faithful: null };
+}
+
+/** AI 업스케일이 실패해도(파일을 못 받음 등) 그림은 연다: 키우지 않은 원본으로 도트화하고 이유를 남긴다. */
+async function tryUpscale(image, model, progress) {
+  if (!model) return { image, upscaled: null, skipped: null };
+  try {
+    return { image: await upscaleImage(image, model, progress), upscaled: model, skipped: null };
+  } catch (error) {
+    console.error(error);
+    return { image, upscaled: null, skipped: error instanceof DotError ? 'AI 파일을 준비하지 못함' : '실행 오류' };
+  }
 }
 
 /** 선 추출 AI는 베리 잉크·2.0 방식에서만 쓴다(원본 색 살림은 원본 선을 그대로 쓴다). */

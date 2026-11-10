@@ -1,7 +1,7 @@
 {
   "name": "dotmaker",
   "productName": "도트메이커",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "description": "캐릭터 그림을 원본 그대로 살린 도트 그림으로 바꾸는 프로그램",
   "author": "YSoung99",
   "license": "MIT",
