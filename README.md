@@ -14,14 +14,15 @@
 
 | 운영체제 | 받기 | 설치 방법 |
 |---|---|---|
-| **윈도우** 10/11 (64비트) | [DotMaker-3.2.0-win-x64.exe](https://github.com/YSoung99/dotmaker/releases/download/v3.2.0-windows/DotMaker-3.2.0-win-x64.exe) | 받은 파일을 실행 → 설치 위치 고르고 **설치**. "Windows의 PC 보호" 창이 뜨면 **추가 정보 → 실행** |
-| **맥** (Apple Silicon, macOS 14 이상) | [DotMaker-mac-3.2.0-arm64.zip](https://github.com/YSoung99/dotmaker-mac/releases/download/v3.2.0/DotMaker-mac-3.2.0-arm64.zip) | 압축을 풀어 앱을 **응용 프로그램** 폴더로 옮긴 뒤, 터미널에서 아래 명령을 한 번 실행 |
+| **윈도우** 10/11 (64비트) | [DotMaker-3.3.0-win-x64.exe](https://github.com/YSoung99/dotmaker/releases/download/v3.3.0-windows/DotMaker-3.3.0-win-x64.exe) | 받은 파일을 실행 → 설치 위치 고르고 **설치**. "Windows의 PC 보호" 창이 뜨면 **추가 정보 → 실행** |
+| **맥** (Apple Silicon, macOS 14 이상) | [DotMaker-mac-3.3.0-arm64.zip](https://github.com/YSoung99/dotmaker-mac/releases/download/v3.3.0/DotMaker-mac-3.3.0-arm64.zip) | 압축을 풀어 앱을 **응용 프로그램** 폴더로 옮긴 뒤, 터미널에서 아래 명령을 한 번 실행 |
 
 ```sh
 xattr -dr com.apple.quarantine "/Applications/도트메이커 JEV 부위별 진단 시험.app"
 ```
 
 - **원본 보존** 방식(결과 크기 100×100 ~ 200×200), 바깥 외곽선 1픽셀 · 경계 섞인 색 정리, **JEV 부위별 진단 · 섞인 색 판정**(직접 고르기)을 씁니다.
+- **AI 보정 탭**(PixelLab·Gemini·OpenAI, 내 API 키), **원본 색 살림**·베리 잉크·2.0 방식·원본 직행, 선 추출 AI도 씁니다. 윈도우와 맥의 기능이 모두 같습니다.
 - **AI 업스케일(3.1.0)**: 도트화하기 전에 원본을 [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN)으로 4배 키워 흐린 선·잡티를 정리합니다(자동 · 6B · v3 · 끄기).
 - JEV를 쓰려면 프로그램의 **JEV 설정**에 [LLM Gateway](https://llmgateway.io) API 키를 넣으세요(판정할 때 그림이 LLM Gateway로 전송되고 요금은 내 계정에 청구).
 
