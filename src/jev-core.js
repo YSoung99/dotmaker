@@ -247,3 +247,39 @@ function jevProbes(subject, reduced, current, focus) {
   const cleanEdges = edges.filter(f => f.points.length < 3).map(f => ({ id: f.id, title: f.title, result: `뚜렷한 이상 없음 · 측정 ${f.points.length}칸` }));
   return { focus, probes, cleanEdges, full: [jevImage(subject, false), jevImage(current, true)], base: jevPicture(current) };
 }
+
+// ── JEV 선·색 비교(원본 보존): 선 처리 후보 → JEV가 고름 → 그 선으로 채색 후보 → JEV가 고름 (맥판 JevColors와 같음)
+const samePixels = (a, b) => a.length === b.length && a.every((p, i) => p === b[i]);
+
+function strokeCandidates(reduced) {
+  const image = reduced.image, grid = image.grid, cells = reduced.cells;
+  const mask = Array.from(image.px, p => A(p) > 0);
+  const baseOutline = Array.from(grid.depths(mask), d => d === 1);
+  const depth = grid.depths(cells.map(c => c.cover >= 116));
+  const candidates = [{ label: '원본 선', image, outline: baseOutline }];
+  for (const [label, width] of [['외곽선 1줄', 1], ['외곽선 2줄', 2], ['원본에 맞춘 굵기', 0]]) {
+    const next = image.clone(), outline = baseOutline.slice();
+    for (let i = 0; i < depth.length; i++) {
+      if (!(depth[i] > 0)) continue;
+      const cell = cells[i];
+      const inBand = width === 0 ? depth[i] <= 2 && cell.dark >= (depth[i] === 1 ? 35 : 55) : depth[i] <= width;
+      if (!inBand) continue;
+      next.px[i] = withAlpha(cell.dark >= 25 ? cell.ink : BLACK, A(next.px[i]));
+      outline[i] = true;
+    }
+    if (!candidates.some(c => samePixels(c.image.px, next.px))) candidates.push({ label, image: next, outline });
+  }
+  return candidates;
+}
+
+function fillCandidates(base, reduced) {
+  const keep = Array.from(base.image.px, (p, i) => base.outline[i] || A(p) < 255 || reduced.cells[i].dark >= 28);
+  const empty = new Array(keep.length).fill(false);
+  const candidates = [{ label: '원본 채색', image: base.image }];
+  for (const limit of [16, 32]) {
+    const settings = { ...defaultSettings(), boundary: false, colors: limit, cleanup: 0 };
+    const image = ColorReducer.apply(base.image, empty, empty, settings, keep);
+    if (!candidates.some(c => samePixels(c.image.px, image.px))) candidates.push({ label: `채색 최대 ${limit}색`, image });
+  }
+  return candidates;
+}

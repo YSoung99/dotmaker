@@ -408,7 +408,7 @@ export function reduce(subject, w, h) {
 // method: 'berry' 베리 잉크 · 'basic' 2.0 방식 · 'soft' 원본 색 살림(개선판 '약하게', 색 수는 softColors)
 // softLines: 원본 색 살림에서 선을 1픽셀로 정리(원본에서 선 줄기 찾기) · softVivid: 원본 색 살림에서 채도 25% 올리기
 // softClean: 원본 색 살림에서 바깥 테두리를 순검정 1px로 잇고 색 면 정리(비슷한 색 합치기·혼자 떨어진 점 지우기)
-export const defaultSettings = () => ({ width: 1, boundary: true, transparency: 80, colors: 12, cleanup: 1, method: 'faithful', aiLines: false, softColors: 24, softLines: true, softVivid: true, softClean: true, crispOutline: false, cleanBlends: false, snapColors: false, upscale: 'auto' });
+export const defaultSettings = () => ({ width: 1, boundary: true, transparency: 80, colors: 12, cleanup: 1, method: 'faithful', aiLines: false, softColors: 24, softLines: true, softVivid: true, softClean: true, crispOutline: false, cleanBlends: false, snapColors: false, preserveMouth: false, upscale: 'auto' });
 
 class Palette {
   constructor(pixels) {
@@ -522,12 +522,13 @@ export function renderBasic(input, settings, lines = null) {
 export const ColorReducer = {
   count(image) { const s = new Set(); for (const p of image.px) if (A(p) > 0) s.add(KEY(p)); return s.size; },
 
-  apply(source, outline, boundary, settings) {
+  /** keep: 건드리지 않을 칸(JEV 채색 후보에서 선·반투명 칸 보호, 맥판 preserving과 같음) */
+  apply(source, outline, boundary, settings, keep = null) {
     const limit = Math.max(6, Math.min(32, settings.colors));
     const image = source.clone();
     const px = image.px;
     const visible = [];
-    for (let i = 0; i < px.length; i++) if (A(px[i]) > 0) visible.push(i);
+    for (let i = 0; i < px.length; i++) if (A(px[i]) > 0 && !keep?.[i]) visible.push(i);
     if (visible.length === 0) return image;
     const histogram = new Map();
     for (const i of visible) if (!outline[i] && !boundary[i]) histogram.set(KEY(px[i]), (histogram.get(KEY(px[i])) ?? 0) + 1);
@@ -600,7 +601,7 @@ export const ColorReducer = {
       const neighbors = new Map();
       image.grid.each8(i, j => {
         const p = mapped[j];
-        if (A(p) > 0 && !outline[j] && !boundary[j] && category(p) === category(mapped[i])) neighbors.set(KEY(p), (neighbors.get(KEY(p)) ?? 0) + 1);
+        if (A(p) > 0 && !keep?.[j] && !outline[j] && !boundary[j] && category(p) === category(mapped[i])) neighbors.set(KEY(p), (neighbors.get(KEY(p)) ?? 0) + 1);
       });
       const own = neighbors.get(KEY(mapped[i])) ?? 0;
       if (!(own <= settings.cleanup)) continue;
@@ -773,6 +774,36 @@ function sampleLines(lines, mask, grid) {
 // ───────────────────────────── 볼터치 살리기
 export const FaceDetail = {
   apply(raster, mask) { deepenBlush(raster, mask, findEyes(raster, mask)); },
+  /** 작은 입선 보존: 눈 두 개 사이 아래의 작은 어두운 선(입)을, 칸마다 원본 선 색으로 살린다(맥판과 같음). */
+  preserveMouth(raster, reduced) {
+    const grid = raster.grid, w = grid.w, cells = reduced.cells;
+    const eyes = findEyes(reduced.image, cells.map(c => c.cover >= 220)).sort((a, b) => a.minX - b.minX);
+    if (eyes.length !== 2) return;
+    const [left, right] = eyes;
+    const x0 = left.maxX + 2, x1 = right.minX - 2;
+    const bottom = Math.trunc((left.maxY + right.maxY) / 2);
+    const height = Math.max(2, Math.min(left.maxY - left.minY, right.maxY - right.minY));
+    const y0 = Math.max(1, bottom - Math.trunc(height / 3)), y1 = Math.min(grid.h - 2, bottom + Math.trunc(height * 2 / 3));
+    if (!(x1 - x0 >= 3 && y0 <= y1)) return;
+    const candidates = cells.map((c, i) => {
+      const x = i % w, y = Math.floor(i / w);
+      return x >= x0 && x <= x1 && y >= y0 && y <= y1 && c.cover >= 220 && c.dark >= 20 && light(c.ink) < 85 &&
+        (c.dark >= 85 || light(c.fill) >= 180);
+    });
+    const pieces = grid.components(candidates).filter(piece => {
+      if (piece.length < 3) return false;
+      const xs = piece.map(i => i % w), ys = piece.map(i => Math.floor(i / w));
+      return Math.max(...xs) - Math.min(...xs) >= 2 && Math.max(...ys) - Math.min(...ys) <= Math.trunc(height / 2)
+        && Math.min(...ys) > y0 && Math.max(...ys) < y1;
+    });
+    if (pieces.length !== 1) return;
+    const columns = new Map();
+    for (const i of pieces[0]) {
+      const best = columns.get(i % w);
+      if (best === undefined || cells[i].dark > cells[best].dark) columns.set(i % w, i);
+    }
+    for (const i of columns.values()) raster.px[i] = withAlpha(cells[i].ink, A(raster.px[i]));
+  },
 };
 const isEye = p => A(p) > 0 && !LineCleanup.isInk(p) && chroma(p) > 24 && B(p) > G(p) && B(p) >= R(p) - 12;
 
@@ -2024,11 +2055,12 @@ export function render(subject, reduced, settings, lines = null) {
   const guide = settings.aiLines ? lines : null;
   const w = reduced.image.grid.w, h = reduced.image.grid.h;
   if (settings.method === 'soft') return renderSoft(subject, w, h, settings);
-  return settings.method === 'basic' ? renderBasic(reduced, settings, guide) : renderBerry(subject, w, h, settings, guide);
+  // 2.0 방식과 원본 직행은 같은 그리기에 축소만 다르다(원본 직행은 원본에서 바로 격자를 읽음).
+  return settings.method === 'basic' || settings.method === 'direct' ? renderBasic(reduced, settings, guide) : renderBerry(subject, w, h, settings, guide);
 }
 export function dotStatus(settings, dotted) {
   if (settings.method === 'faithful') {
-    const extras = [settings.snapColors && '원본 색 맞추기', settings.cleanBlends && '경계 섞인 색 정리', settings.crispOutline && '바깥 외곽선 원본 선 색'].filter(Boolean);
+    const extras = [settings.snapColors && '원본 색 맞추기', settings.cleanBlends && '경계 섞인 색 정리', settings.preserveMouth && '작은 입선 보존', settings.crispOutline && '바깥 외곽선 원본 선 색'].filter(Boolean);
     return `원본 보존  ·  ${dotted.image.grid.w}×${dotted.image.grid.h} px  ·  투명 PNG${extras.length ? '  ·  ' + extras.join(' · ') : ''}`;
   }
   const colors = `실제 ${ColorReducer.count(dotted.image)}색`;
@@ -2038,7 +2070,7 @@ export function dotStatus(settings, dotted) {
     for (const p of dotted.image.px) if (A(p) === 255) opaque.add(KEY(p));
     return `원본 색 살림${settings.softLines ? ' · 선 1px 정리' : ''}${settings.softVivid ? ' · 선명하게' : ''}${settings.softClean ? ' · 테두리·색 면 정리' : ''}  ·  ${opaque.size}색 (가장자리 반투명 제외)`;
   }
-  if (settings.method !== 'basic') return `베리 잉크  ·  ${colors}`;
+  if (settings.method !== 'basic') return `${settings.method === 'direct' ? '원본 직행' : '베리 잉크'}  ·  ${colors}`;
   const head = dotted.headCount > 0 ? '분홍 머리 영역 감지' : '분홍 머리 영역 미감지';
   const body = dotted.bodyCount > 0 ? '밝은 몸통 영역 감지' : '밝은 몸통 영역 미감지';
   return `${head}  ·  ${body}  ·  ${colors}`;
@@ -2195,6 +2227,7 @@ export function renderFaithful(reduced, settings, subject) {
   let image = reduced.image;
   if (settings.snapColors) image = snapColors(image, reduced, subject);
   if (settings.cleanBlends) image = cleanBlends(image);
+  if (settings.preserveMouth) { image = image.clone(); FaceDetail.preserveMouth(image, reduced); }
   if (settings.crispOutline) image = crispOutline(image, reduced.cells);
   return { image };
 }

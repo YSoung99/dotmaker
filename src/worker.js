@@ -14,8 +14,17 @@ function faithfulParts() {
   return current.faithful;
 }
 
+/** 원본 직행은 캐릭터는 그대로 두고, 축소만 원본에서 바로 격자를 읽는다(맥판과 같음). */
+function directParts() {
+  const { w, h } = current.reduced.image.grid;
+  if (!current.direct || current.direct.w !== w || current.direct.h !== h) {
+    current.direct = { w, h, subject: current.subject, reduced: reduceDirect(current.subject, w, h) };
+  }
+  return current.direct;
+}
+
 function finish(id, settings) {
-  const parts = settings.method === 'faithful' ? faithfulParts() : current;
+  const parts = settings.method === 'faithful' ? faithfulParts() : settings.method === 'direct' ? directParts() : current;
   const dotted = render(parts.subject, parts.reduced, settings, current.lines);
   const reduced = picture(parts.reduced.image), dot = picture(dotted.image);
   const sharpened = current.upscaled ? ` · AI 업스케일 ${current.upscaled === 'esr6b' ? '6B' : 'v3'}`
@@ -52,6 +61,25 @@ async function handle(job) {
       const { subject, reduced } = faithfulParts();
       const now = Raster.fromStraight(job.current.bytes, job.current.w, job.current.h);
       self.postMessage({ id: job.id, type: 'done', ...jevProbes(subject, reduced, now, job.focus) });
+    } else if (job.type === 'jevStrokes') {
+      // JEV 선·색 비교 1단계: 원본(캐릭터)과 선 처리 후보
+      const { subject, reduced } = faithfulParts();
+      current.jevStrokes = strokeCandidates(reduced);
+      self.postMessage({ id: job.id, type: 'done', reference: picture(subject),
+        candidates: current.jevStrokes.map(c => ({ label: c.label, picture: picture(c.image) })) });
+    } else if (job.type === 'jevFills') {
+      // 2단계: 고른 선 처리로 채색 후보
+      const fills = fillCandidates(current.jevStrokes[job.index], faithfulParts().reduced);
+      self.postMessage({ id: job.id, type: 'done', candidates: fills.map(c => ({ label: c.label, picture: picture(c.image) })) });
+    } else if (job.type === 'jevRender') {
+      // JEV 자동 선택: 설정 후보마다 그린 결과
+      if (job.list.some(wantsLines) && !current.lines) current.lines = await extractLines(current.subject, progress);
+      const results = job.list.map(settings => {
+        const parts = settings.method === 'faithful' ? faithfulParts() : settings.method === 'direct' ? directParts() : current;
+        const dotted = render(parts.subject, parts.reduced, settings, current.lines);
+        return { reduced: picture(parts.reduced.image), dotted: picture(dotted.image), status: dotStatus(settings, dotted) };
+      });
+      self.postMessage({ id: job.id, type: 'done', results });
     } else if (job.type === 'subject') {
       // 클라우드 AI에 보낼 캐릭터 그림
       const subject = picture(current.subject);
