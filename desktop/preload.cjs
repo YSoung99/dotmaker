@@ -1,4 +1,4 @@
-// 화면에 JEV 요청·키 관리만 열어 준다(키 값 자체는 화면으로 돌려주지 않는다).
+// 화면에 JEV 요청·키 관리와 함께 들어 있는 AI 모델 읽기만 열어 준다(키 값 자체는 화면으로 돌려주지 않는다).
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('dotmakerDesktop', {
@@ -6,4 +6,5 @@ contextBridge.exposeInMainWorld('dotmakerDesktop', {
   hasJevKey: () => ipcRenderer.invoke('jev:hasKey'),
   setJevKey: key => ipcRenderer.invoke('jev:setKey', key),
   clearJevKey: () => ipcRenderer.invoke('jev:clearKey'),
+  readModel: id => ipcRenderer.invoke('model:read', id),
 });

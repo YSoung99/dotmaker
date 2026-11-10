@@ -408,7 +408,7 @@ export function reduce(subject, w, h) {
 // method: 'berry' 베리 잉크 · 'basic' 2.0 방식 · 'soft' 원본 색 살림(개선판 '약하게', 색 수는 softColors)
 // softLines: 원본 색 살림에서 선을 1픽셀로 정리(원본에서 선 줄기 찾기) · softVivid: 원본 색 살림에서 채도 25% 올리기
 // softClean: 원본 색 살림에서 바깥 테두리를 순검정 1px로 잇고 색 면 정리(비슷한 색 합치기·혼자 떨어진 점 지우기)
-export const defaultSettings = () => ({ width: 1, boundary: true, transparency: 80, colors: 12, cleanup: 1, method: 'faithful', aiLines: false, softColors: 24, softLines: true, softVivid: true, softClean: true, crispOutline: false, cleanBlends: false });
+export const defaultSettings = () => ({ width: 1, boundary: true, transparency: 80, colors: 12, cleanup: 1, method: 'faithful', aiLines: false, softColors: 24, softLines: true, softVivid: true, softClean: true, crispOutline: false, cleanBlends: false, upscale: 'auto' });
 
 class Palette {
   constructor(pixels) {

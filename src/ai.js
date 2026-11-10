@@ -183,3 +183,91 @@ async function extractLines(subject, progress) {
   }
   return lines;
 }
+
+// ── AI 업스케일(ESRGAN): Real-ESRGAN(xinntao, BSD-3) 애니 모델 두 개를 ONNX로 바꾼 것(맥판과 같은 파일).
+// 도트화하기 전에 원본을 4배로 키워 흐린 선·잡티를 정리한다.
+const UPSCALE_TILE = 160, UPSCALE_PAD = 10, UPSCALE_MAX = 1024;
+const upscaleSessions = {};
+
+/** 이 원본에 쓸 모델(AI 파일 id). 자동은 원본이 결과 크기의 4배보다 작을 때만, GPU가 있으면 6B·없으면 빠른 v3. */
+function upscaleModel(image, mode, target) {
+  if (mode === 'strong') return 'esr6b';
+  if (mode === 'light') return 'esrV3';
+  if (mode === 'auto' && Math.max(image.w, image.h) < target * 4) return self.navigator.gpu ? 'esr6b' : 'esrV3';
+  return null;
+}
+
+/** 원본(프리멀티플라이 바이트)을 4배로 키운 그림. 투명한 곳은 가까운 그림 색으로 채워 돌리고 투명도는 따로 키운다. */
+async function upscaleImage(image, id, progress) {
+  if (!upscaleSessions[id]) {
+    const ort = await loadOrt(progress);
+    const bytes = await aiFile(id, progress);
+    progress('AI 업스케일 모델 준비 중');
+    upscaleSessions[id] = await ort.InferenceSession.create(bytes, { executionProviders: providers() });
+  }
+  const session = upscaleSessions[id];
+  let { w, h } = image;
+  let rgba = new Float32Array(w * h * 4);
+  for (let i = 0; i < w * h; i++) {
+    const a = image.data[i * 4 + 3];
+    for (let k = 0; k < 3; k++) rgba[i * 4 + k] = a ? Math.min(255, image.data[i * 4 + k] * 255 / a) : 0;
+    rgba[i * 4 + 3] = a;
+  }
+  // 직접 고른 경우에도 아주 큰 원본은 먼저 줄인다(키워도 차이가 없고 시간만 든다).
+  if (Math.max(w, h) > UPSCALE_MAX) {
+    const s = UPSCALE_MAX / Math.max(w, h), nw = Math.max(1, Math.trunc(w * s)), nh = Math.max(1, Math.trunc(h * s));
+    rgba = bilinear(rgba, w, h, nw, nh, 4);
+    w = nw; h = nh;
+  }
+  const solid = new Uint8Array(w * h);
+  let transparent = false;
+  for (let i = 0; i < w * h; i++) { solid[i] = rgba[i * 4 + 3] >= 128; if (rgba[i * 4 + 3] < 255) transparent = true; }
+  if (transparent) {
+    // 가장 가까운 그림 픽셀의 색으로 투명한 곳을 채운다(배경색이 테두리로 번져 들지 않게).
+    const queue = [];
+    for (let i = 0; i < w * h; i++) if (solid[i]) queue.push(i);
+    for (let n = 0; n < queue.length; n++) {
+      const i = queue[n], x = i % w;
+      for (const j of [x > 0 ? i - 1 : -1, x + 1 < w ? i + 1 : -1, i - w, i + w]) {
+        if (j < 0 || j >= w * h || solid[j]) continue;
+        solid[j] = 1;
+        for (let k = 0; k < 3; k++) rgba[j * 4 + k] = rgba[i * 4 + k];
+        queue.push(j);
+      }
+    }
+  }
+  const ow = w * 4, oh = h * 4, out = new Uint8Array(ow * oh * 4);
+  const tiles = Math.ceil(w / UPSCALE_TILE) * Math.ceil(h / UPSCALE_TILE);
+  let done = 0;
+  for (let ty = 0; ty < h; ty += UPSCALE_TILE) {
+    for (let tx = 0; tx < w; tx += UPSCALE_TILE) {
+      progress(`AI가 원본을 4배로 키우는 중 (${++done}/${tiles})`);
+      // 가장자리 이음새가 보이지 않게 둘레를 조금 더 넣어 돌리고 가운데만 쓴다.
+      const x0 = Math.max(0, tx - UPSCALE_PAD), y0 = Math.max(0, ty - UPSCALE_PAD);
+      const x1 = Math.min(w, tx + UPSCALE_TILE + UPSCALE_PAD), y1 = Math.min(h, ty + UPSCALE_TILE + UPSCALE_PAD);
+      const tw = x1 - x0, th = y1 - y0, input = new Float32Array(3 * tw * th);
+      for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) {
+        const s = ((y + y0) * w + x + x0) * 4;
+        for (let k = 0; k < 3; k++) input[k * tw * th + y * tw + x] = rgba[s + k] / 255;
+      }
+      const feeds = { [session.inputNames[0]]: new self.ort.Tensor('float32', input, [1, 3, th, tw]) };
+      const result = (await session.run(feeds))[session.outputNames[0]].data;
+      const plane = tw * 4 * th * 4, sx = (tx - x0) * 4, sy = (ty - y0) * 4;
+      const cw = (Math.min(w, tx + UPSCALE_TILE) - tx) * 4, ch = (Math.min(h, ty + UPSCALE_TILE) - ty) * 4;
+      for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) {
+        const s = (y + sy) * tw * 4 + x + sx, d = ((ty * 4 + y) * ow + tx * 4 + x) * 4;
+        for (let k = 0; k < 3; k++) out[d + k] = Math.round(Math.min(1, Math.max(0, result[k * plane + s])) * 255);
+      }
+    }
+  }
+  // 투명도: 키운 크기로 부드럽게 늘린 뒤 프리멀티플라이 바이트로 돌려준다.
+  const alpha = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) alpha[i] = rgba[i * 4 + 3];
+  const big = transparent ? bilinear(alpha, w, h, ow, oh, 1) : null;
+  for (let i = 0; i < ow * oh; i++) {
+    const a = big ? Math.round(Math.min(255, Math.max(0, big[i]))) : 255;
+    for (let k = 0; k < 3; k++) out[i * 4 + k] = Math.floor((out[i * 4 + k] * a + 127) / 255);
+    out[i * 4 + 3] = a;
+  }
+  return { w: ow, h: oh, data: out };
+}

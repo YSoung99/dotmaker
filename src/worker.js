@@ -1,6 +1,6 @@
 // 작업자(Web Worker): 변환과 AI를 화면과 따로 돌려 처리 중에도 창이 멈추지 않게 한다.
 // 일은 들어온 순서대로 하나씩 한다. 원본·캐릭터·선 지도는 여기 두고, 화면에는 결과 그림만 보낸다.
-let current = null; // { original, masked, subject, reduced, lines, faithful }
+let current = null; // { raw, upscaled, original, masked, subject, reduced, lines, faithful }
 
 const picture = raster => ({ w: raster.grid.w, h: raster.grid.h, bytes: raster.straightBytes() });
 
@@ -18,7 +18,8 @@ function finish(id, settings) {
   const parts = settings.method === 'faithful' ? faithfulParts() : current;
   const dotted = render(parts.subject, parts.reduced, settings, current.lines);
   const reduced = picture(parts.reduced.image), dot = picture(dotted.image);
-  self.postMessage({ id, type: 'done', reduced, dotted: dot, status: dotStatus(settings, dotted) },
+  const sharpened = current.upscaled ? ` · AI 업스케일 ${current.upscaled === 'esr6b' ? '6B' : 'v3'}` : '';
+  self.postMessage({ id, type: 'done', reduced, dotted: dot, status: dotStatus(settings, dotted) + sharpened },
     [reduced.bytes.buffer, dot.bytes.buffer]);
 }
 
@@ -27,15 +28,23 @@ async function handle(job) {
   try {
     if (job.type === 'open') {
       const { original, w, h, settings } = job;
-      const prepared = await prepareAny(original, w, h, progress);
-      const lines = wantsLines(settings) ? await extractLines(prepared.subject, progress) : null;
-      current = { original, masked: prepared.masked, subject: prepared.subject, reduced: prepared.reduced, lines, faithful: null };
+      current = await load(original, w, h, settings, progress);
       finish(job.id, settings);
     } else if (job.type === 'resize') {
-      current = { ...current, reduced: reduce(current.subject, job.w, job.h) };
+      // 결과 크기가 바뀌면 '자동' AI 업스케일을 쓸지가 달라질 수 있다.
+      if (upscaleModel(current.raw, job.settings.upscale, Math.max(job.w, job.h)) !== current.upscaled) {
+        current = await load(current.raw, job.w, job.h, job.settings, progress);
+      } else {
+        current = { ...current, reduced: reduce(current.subject, job.w, job.h) };
+      }
       finish(job.id, job.settings);
     } else if (job.type === 'redot') {
-      if (wantsLines(job.settings) && !current.lines) current.lines = await extractLines(current.subject, progress);
+      const { w, h } = current.reduced.image.grid;
+      if (upscaleModel(current.raw, job.settings.upscale, Math.max(w, h)) !== current.upscaled) {
+        current = await load(current.raw, w, h, job.settings, progress);
+      } else if (wantsLines(job.settings) && !current.lines) {
+        current.lines = await extractLines(current.subject, progress);
+      }
       finish(job.id, job.settings);
     } else if (job.type === 'jev') {
       // JEV에 물을 항목(확대 그림·후보·바꿀 칸). 요청은 화면이 프로그램 본체를 거쳐 보낸다.
@@ -56,7 +65,8 @@ async function handle(job) {
         result = raster;
         status = `AI 도트 그림 · 배경 지움 · ${raster.grid.w}×${raster.grid.h}`;
       } else {
-        const prepared = await prepareAny(image, w, h, progress);
+        const model = upscaleModel(image, settings.upscale, Math.max(w, h));
+        const prepared = await prepareAny(model ? await upscaleImage(image, model, progress) : image, w, h, progress);
         const lines = wantsLines(settings) ? await extractLines(prepared.subject, progress) : null;
         const dotted = render(prepared.subject, prepared.reduced, settings, lines);
         result = dotted.image;
@@ -70,6 +80,15 @@ async function handle(job) {
     const message = error instanceof DotError ? error.message : `${Errors.render} (${error.message})`;
     self.postMessage({ id: job.id, type: 'error', message });
   }
+}
+
+/** 원본 → (AI 업스케일) → 캐릭터 분리·축소·선 지도. raw는 처음 연 원본이고, AI 업스케일 설정이 바뀌면 여기서 다시 시작한다. */
+async function load(raw, w, h, settings, progress) {
+  const upscaled = upscaleModel(raw, settings.upscale, Math.max(w, h));
+  const original = upscaled ? await upscaleImage(raw, upscaled, progress) : raw;
+  const prepared = await prepareAny(original, w, h, progress);
+  const lines = wantsLines(settings) ? await extractLines(prepared.subject, progress) : null;
+  return { raw, upscaled, original, masked: prepared.masked, subject: prepared.subject, reduced: prepared.reduced, lines, faithful: null };
 }
 
 /** 선 추출 AI는 베리 잉크·2.0 방식에서만 쓴다(원본 색 살림은 원본 선을 그대로 쓴다). */

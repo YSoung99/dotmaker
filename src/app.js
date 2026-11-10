@@ -1,5 +1,5 @@
 // 도트메이커 웹 버전 화면. 변환·AI는 작업자(worker.js)가 하고, 여기서는 열기·설정·미리보기·저장·설명서만 한다.
-const VERSION = '3.0.0';
+const VERSION = '3.1.0';
 const STAGES = {
   dot: { name: '도트화', instruction: '머리와 몸통을 구분해 검은 윤곽과 몸통 경계색을 적용합니다.' },
   repair: { name: 'AI 보정', instruction: '클라우드 AI(PixelLab·Gemini·OpenAI)에 캐릭터를 보내 도트 그림으로 다시 그립니다. 쓰려면 그 서비스의 내 API 키가 필요합니다.' },
@@ -178,6 +178,16 @@ function dimensions() {
 let submittedSettings = null;
 const applyProduct = data => { state.product = { reduced: data.reduced, dotted: data.dotted, status: data.status }; };
 
+// 설치형 프로그램: 함께 들어 있는 AI 업스케일 모델을 처음 한 번 AI 파일 저장소에 넣어 둔다.
+const bundledModels = (async () => {
+  if (!window.dotmakerDesktop?.readModel) return;
+  for (const id of ['esr6b', 'esrV3']) {
+    if (await fileStore.get(id)) continue;
+    const bytes = await window.dotmakerDesktop.readModel(id).catch(() => null);
+    if (bytes) await fileStore.put(id, new Uint8Array(bytes)).catch(() => {});
+  }
+})();
+
 async function open(file) {
   if (!file) return;
   const size = dimensions();
@@ -187,6 +197,7 @@ async function open(file) {
   update();
   let original;
   try {
+    await bundledModels;
     original = await decode(file);
   } catch (error) {
     state.busy = null;
@@ -384,6 +395,14 @@ function stepper(text, value, min, max, step, onChange, disabled = false) {
 }
 
 const labelled = (text, control) => el('label', { className: 'field' }, el('span', { textContent: text }), control);
+
+/** AI 업스케일(ESRGAN): 도트화 전에 원본을 4배로 키운다. 도트화·AI 보정 탭이 같은 설정을 쓴다. */
+function upscaleControl() {
+  const control = labelled('AI 업스케일', segmented([['auto', '자동'], ['strong', '6B'], ['light', 'v3'], ['off', '끄기']],
+    state.settings.upscale, v => setSetting('upscale', v), false, 'AI 업스케일'));
+  control.title = '도트화하기 전에 원본을 AI(Real-ESRGAN)로 4배 키워 흐린 선과 잡티를 정리합니다. 자동은 원본이 결과 크기의 4배보다 작을 때만 켭니다. 6B는 더 깔끔하고, v3는 더 빠릅니다.';
+  return control;
+}
 const row = (...children) => el('div', { className: 'row' }, ...children);
 
 function toggle(text, checked, onChange, disabled, title = '') {
@@ -398,7 +417,7 @@ function controls(stage) {
   const sizeSelect = el('select', { disabled: busy, onchange: event => { state.width = state.height = event.target.value; resize(); } },
     ...Array.from({ length: 11 }, (_, k) => 100 + k * 10).map(v => el('option', { value: String(v), textContent: `${v}×${v}`, selected: String(v) === state.width })));
   sizeSelect.setAttribute('aria-label', '결과 크기');
-  const sizeRow = row(labelled('결과 크기', sizeSelect));
+  const sizeRow = row(labelled('결과 크기', sizeSelect), upscaleControl());
   if (stage === 'dot') {
     // 설정은 계산 중에도 바꿀 수 있다(마지막 설정으로 다시 계산).
     const s = state.settings, off = !loaded, soft = s.method === 'soft';
@@ -512,6 +531,7 @@ function cloudControls() {
       el('span', { className: 'muted', textContent: info.detail })),
     keyRow(c.provider),
     options,
+    row(upscaleControl(), el('span', { className: 'note', textContent: '다시 그린 그림을 도트화하기 전에 적용됩니다(받은 그림이 이미 도트 그림이면 쓰지 않음)' })),
     inputRow(),
     row(el('button', { type: 'button', className: 'primary', textContent: 'AI 보정 실행', disabled: busy || !(state.product || c.input) || !key, onclick: runCloud }),
       el('span', { className: 'note', textContent: correcting()
@@ -639,7 +659,7 @@ function helpScreen() {
       '배경 분리 AI는 맥 앱은 앱 안에 들어 있고, 이 프로그램은 처음 쓸 때 한 번 받습니다.',
       '<b>AI 보정</b> 탭(클라우드 AI)은 이 프로그램에만 있습니다.',
     ])),
-    el('p', { className: 'muted', textContent: `도트메이커 ${desktop ? '프로그램' : '웹 버전'} ${VERSION} · 모델: skytnt/anime-seg (Apache-2.0), p1atdev/MangaLineExtraction-hf (MIT) · 실행 도구: onnxruntime-web (MIT) · 프로그램 본체: Electron (MIT)` }),
+    el('p', { className: 'muted', textContent: `도트메이커 ${desktop ? '프로그램' : '웹 버전'} ${VERSION} · 모델: skytnt/anime-seg (Apache-2.0), p1atdev/MangaLineExtraction-hf (MIT), Real-ESRGAN (BSD-3-Clause) · 실행 도구: onnxruntime-web (MIT) · 프로그램 본체: Electron (MIT)` }),
   );
 }
 
