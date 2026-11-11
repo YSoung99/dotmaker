@@ -4,4 +4,6 @@
 const SETTINGS = {
   // 결과 크기(정사각형, px): 가장 작은 크기 ~ 가장 큰 크기를 간격마다. 프로그램이 받는 범위는 16 ~ 512.
   size: { min: 50, max: 200, step: 10, initial: 100 },
+  // 새 버전 알림과 받기 링크가 가리키는 깃허브 저장소.
+  repository: 'YSoung99/dotmaker',
 };

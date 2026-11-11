@@ -15,13 +15,6 @@ function readKey() {
   }
 }
 
-// AI 실행 도구와 AI 업스케일 모델은 프로그램에 함께 들어 있다. 화면이 처음 한 번 꺼내 AI 파일 저장소에 넣는다(인터넷에서 받지 않게).
-const MODELS = {
-  ortJs: 'ort.webgpu.min.js', ortMjs: 'ort-wasm-simd-threaded.asyncify.mjs', ortWasm: 'ort-wasm-simd-threaded.asyncify.wasm',
-  esr6b: 'esrgan-anime-6b.onnx', esrV3: 'esrgan-animevideo-v3.onnx',
-};
-ipcMain.handle('model:read', (_event, id) => (MODELS[id] ? fs.readFileSync(path.join(__dirname, 'models', MODELS[id])) : null));
-
 ipcMain.handle('jev:hasKey', () => Boolean(readKey()));
 ipcMain.handle('jev:setKey', (_event, key) => {
   if (!safeStorage.isEncryptionAvailable()) throw new Error('이 컴퓨터에서 암호화 저장소를 쓸 수 없습니다.');

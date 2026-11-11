@@ -1,4 +1,4 @@
-// 도트메이커 웹 버전 화면. 변환·AI는 작업자(worker.js)가 하고, 여기서는 열기·설정·미리보기·저장·설명서만 한다.
+// 도트메이커 화면. 변환·AI는 작업자(worker.js)가 하고, 여기서는 열기·설정·미리보기·저장·설명서만 한다.
 const VERSION = '__VERSION__';  // tools/build.mjs가 package.json의 버전을 넣는다
 const STAGES = {
   dot: { name: '도트화', instruction: '머리와 몸통을 구분해 검은 윤곽과 몸통 경계색을 적용합니다.' },
@@ -178,15 +178,20 @@ function dimensions() {
 let submittedSettings = null;
 const applyProduct = data => { state.product = { reduced: data.reduced, dotted: data.dotted, status: data.status }; };
 
-// 설치형 프로그램: 함께 들어 있는 AI 실행 도구·AI 업스케일 모델을 처음 한 번 AI 파일 저장소에 넣어 둔다.
-const bundledModels = (async () => {
-  if (!window.dotmakerDesktop?.readModel) return;
-  for (const id of ['ortJs', 'ortMjs', 'ortWasm', 'esr6b', 'esrV3']) {
-    if (await fileStore.get(id)) continue;
-    const bytes = await window.dotmakerDesktop.readModel(id).catch(() => null);
-    if (bytes) await fileStore.put(id, new Uint8Array(bytes)).catch(() => {});
-  }
-})();
+// 새 버전 알림: 깃허브의 최신 릴리스가 지금 버전보다 높으면 위쪽에 받기 링크를 보여 준다(실패하면 조용히 넘어감).
+async function checkUpdate() {
+  try {
+    const reply = await fetch(`https://api.github.com/repos/${SETTINGS.repository}/releases/latest`, { signal: AbortSignal.timeout(8000) });
+    if (!reply.ok) return;
+    const latest = String((await reply.json()).tag_name || '').replace(/^v/, '');
+    const parts = v => v.split('.').map(Number);
+    const [a, b] = [parts(latest), parts(VERSION)];
+    if (a.length !== 3 || a.some(Number.isNaN)) return;
+    const newer = a[0] !== b[0] ? a[0] > b[0] : a[1] !== b[1] ? a[1] > b[1] : a[2] > b[2];
+    if (!newer) return;
+    $('version').after(el('a', { className: 'update', href: `https://github.com/${SETTINGS.repository}/releases/latest`, target: '_blank', rel: 'noopener', textContent: `새 버전 ${latest} 받기` }));
+  } catch { /* 인터넷이 없거나 깃허브가 응답하지 않으면 알림 없이 넘어간다 */ }
+}
 
 async function open(file) {
   if (!file) return;
@@ -197,7 +202,6 @@ async function open(file) {
   update();
   let original;
   try {
-    await bundledModels;
     original = await decode(file);
   } catch (error) {
     state.busy = null;
@@ -646,7 +650,7 @@ function helpScreen() {
       '판정할 때 배경을 분리한 원본과 후보 그림이 LLM Gateway로 전송되며, 요금은 내 키 계정에 청구됩니다. 한 번에 10~20초쯤 걸립니다.',
     ])),
     section('AI 파일',
-      el('p', { innerHTML: 'AI 실행 도구와 AI 업스케일 모델은 프로그램에 들어 있습니다. 나머지 AI 기능(배경 분리·선 추출)은 처음 쓸 때 아래 파일을 <b>자동으로 받아 이 프로그램의 저장소에 보관</b>합니다(받다 끊기면 이어받음). 그다음부터는 인터넷 없이 됩니다.' }),
+      el('p', { innerHTML: 'AI 기능(AI 업스케일·배경 분리·선 추출)은 처음 쓸 때 아래 파일을 <b>자동으로 받아 이 프로그램의 저장소에 보관</b>합니다(받다 끊기면 이어받음). 그다음부터는 인터넷 없이 됩니다.' }),
       el('p', { innerHTML: '<b>넣을 경로는 따로 없습니다.</b> 파일은 폴더가 아니라 프로그램 저장소(IndexedDB, 이름 <code>dotmaker-ai</code>)에 들어갑니다. 아래 <b>저장된 AI 파일 지우기</b>로 지울 수 있습니다.' }),
       el('p', { innerHTML: '<b>직접 받아 넣기</b>(인터넷이 막힌 PC 등): 아래 <b>받는 주소</b>에서 파일을 받아(열리면 오른쪽 클릭 → \'다른 이름으로 링크 저장\') 어느 폴더에 두든 상관없이, <b>AI 파일 불러오기…</b>로 한꺼번에 고르면 됩니다. 파일은 크기로 알아보니 이름이 바뀌어도 괜찮지만, 내용(크기)은 그대로여야 합니다.' }),
       el('p', { className: 'muted', textContent: '필요한 파일: 배경 분리 = 실행 도구 3개 + isnetis.onnx · 선 추출 = 실행 도구 3개 + model.safetensors' }),
@@ -668,11 +672,10 @@ function helpScreen() {
       '<b>AI가 느림</b>: 그래픽카드 가속을 못 쓰면 CPU로 돌아 느립니다. 색 배경 그림은 보통 1~3초, 처음 한 번은 모델 받기로 1분쯤 걸립니다.',
       '<b>캐릭터를 분리하지 못함</b>: 캐릭터 주위에 여백이 있는 원본이나 투명 PNG가 가장 잘 됩니다.',
     ])),
-    section('맥 앱과 같은 점', list([
-      '맥 앱(dotmaker-mac)과 기능이 모두 같습니다. 반투명 가장자리 칸의 색이 반올림 차이로 조금 다를 수 있습니다.',
-      'AI 파일을 두는 방식만 다릅니다: 맥 앱은 배경 분리 AI까지 앱 안에 들어 있고, 이 프로그램은 배경 분리·선 추출 AI를 처음 쓸 때 한 번 받습니다.',
+    section('맥과 윈도우', list([
+      '맥용과 윈도우용은 같은 코드로 만들어 기능과 결과가 같습니다.',
     ])),
-    el('p', { className: 'muted', textContent: `도트메이커 ${desktop ? '프로그램' : '웹 버전'} ${VERSION} · 모델: skytnt/anime-seg (Apache-2.0), p1atdev/MangaLineExtraction-hf (MIT), Real-ESRGAN (BSD-3-Clause) · 실행 도구: onnxruntime-web (MIT) · 프로그램 본체: Electron (MIT)` }),
+    el('p', { className: 'muted', textContent: `도트메이커 ${VERSION} · 모델: skytnt/anime-seg (Apache-2.0), p1atdev/MangaLineExtraction-hf (MIT), Real-ESRGAN (BSD-3-Clause) · 실행 도구: onnxruntime-web (MIT) · 프로그램 본체: Electron (MIT)` }),
   );
 }
 
@@ -709,7 +712,8 @@ function update() {
 }
 
 // ───────────── 시작
-$('version').textContent = `${desktop ? '프로그램' : '웹 버전'} ${VERSION}`;
+$('version').textContent = VERSION;
+checkUpdate();
 $('open').onclick = () => $('file').click();
 $('file').onchange = event => { open(event.target.files[0]); event.target.value = ''; };
 $('save').onclick = save;

@@ -33,14 +33,17 @@ xattr -dr com.apple.quarantine /Applications/DotMaker.app
 
 자세한 설명은 프로그램 안의 **설명서** 탭에 있습니다.
 
+<img src="docs/screenshot.png" alt="도트메이커 화면" width="760">
+
 ## ✨ 할 수 있는 것
 
 - **원본 보존** 도트화(결과 크기 50×50 ~ 200×200), 원본 색 살림 · 베리 잉크 · 2.0 방식 · 원본 직행
-- **AI 업스케일(ESRGAN)**: 도트화하기 전에 원본을 4배로 키워 흐린 선·잡티를 정리합니다. 자동(원본이 결과 크기의 4배보다 작을 때만) · 6B(더 깔끔) · v3(더 빠름) · 끄기 중에서 고르고, AI 보정 탭의 다시 그린 그림에도 적용됩니다. 모델은 프로그램에 들어 있습니다.
+- **AI 업스케일(ESRGAN)**: 도트화하기 전에 원본을 4배로 키워 흐린 선·잡티를 정리합니다. 자동(원본이 결과 크기의 4배보다 작을 때만) · 6B(더 깔끔) · v3(더 빠름) · 끄기 중에서 고르고, AI 보정 탭의 다시 그린 그림에도 적용됩니다.
 - 바깥 외곽선 1픽셀(원본 선 색) · 원본 색 맞추기 · 경계 섞인 색 정리 · 작은 입선 보존, **JEV 부위별 진단 · 섞인 색 판정 · 선·색 비교 · 자동 선택**([LLM Gateway](https://llmgateway.io) API 키 필요, 판정할 때 그림이 전송되고 요금은 내 계정에 청구)
 - AI 보정: PixelLab · Gemini · OpenAI(각 서비스의 내 API 키 필요)
 - 맥과 윈도우 프로그램은 **같은 코드로 만들어** 기능과 결과가 같습니다.
-- AI 실행 도구와 AI 업스케일 모델은 프로그램에 들어 있어 인터넷 없이 돌아갑니다. 색 배경 그림의 배경 분리 AI(약 168MB)만 처음 쓸 때 한 번 받습니다.
+- AI 기능(AI 업스케일·배경 분리·선 추출)에 쓰는 파일은 **처음 쓸 때 한 번 자동으로 받습니다**(인터넷 필요). 그래서 설치 파일이 가볍습니다.
+- **새 버전 알림**: 새 버전이 나오면 프로그램 위쪽에 받기 링크가 뜹니다.
 - AI 업스케일이 어떤 이유로 실패하면 그림은 업스케일 없이 도트화하고, 상태줄에 'AI 업스케일 건너뜀'으로 알려 줍니다.
 
 ## 🛠️ 고쳐서 쓰기
@@ -49,7 +52,8 @@ xattr -dr com.apple.quarantine /Applications/DotMaker.app
 
 | 바꾸고 싶은 것 | 고칠 곳 |
 |---|---|
-| 결과 크기 범위·간격·처음 크기 | [`src/settings.js`](src/settings.js) |
+| 결과 크기 범위·간격·처음 크기, 새 버전 알림이 보는 저장소 | [`src/settings.js`](src/settings.js) |
+| AI 파일 받는 주소 | `src/files.js` |
 | 프로그램 버전 | [`package.json`](package.json)의 `"version"` (화면과 설치 파일 이름에 자동 반영) |
 | 화면(버튼·문구·설명서) | `src/app.js`, `src/app.html` |
 | 도트화 계산 | `src/core.js` |
@@ -67,10 +71,11 @@ npm run dist       # 설치 파일 만들기: release/ 에 윈도우 .exe 와 �
 
 `npm run dist:win`, `npm run dist:mac`으로 한쪽만 만들 수도 있습니다. `dist/`와 `release/`는 만들어지는 파일이라 저장소에 올리지 않습니다.
 
-`desktop/models/`의 AI 업스케일 모델은 [dotmaker-mac의 scripts/export-esrgan.py](https://github.com/YSoung99/dotmaker-mac/blob/main/scripts/export-esrgan.py)로 공식 가중치에서 다시 만들 수 있습니다.
+AI 업스케일 모델(ONNX)은 [models-esrgan 릴리스](https://github.com/YSoung99/dotmaker/releases/tag/models-esrgan)에 있고, [dotmaker-mac의 scripts/export-esrgan.py](https://github.com/YSoung99/dotmaker-mac/blob/main/scripts/export-esrgan.py)로 공식 가중치에서 다시 만들 수 있습니다.
 
 ## 📝 업데이트 기록
 
+- **3.6.0**: 설치 파일이 가벼워졌습니다(안 쓰는 언어 파일을 빼고, AI 파일은 처음 쓸 때 받음). 새 버전이 나오면 프로그램 위쪽에 알림이 뜹니다. 남아 있던 웹 버전 문구를 정리했습니다.
 - **3.5.0**: 맥과 윈도우 프로그램을 **코드 하나로 통합**했습니다. 받는 곳도 이 저장소 한 곳입니다. 맥 앱은 `DotMaker.app`(.dmg)으로 바뀌었고 결과는 예전 맥 앱과 같습니다. 자주 바꾸는 값은 `src/settings.js`에 모았습니다.
 - **3.4.0**: 결과 크기를 **50×50부터** 고를 수 있습니다(50 ~ 200, 10px 단위). 도트화 탭과 AI 보정 탭이 같은 크기를 씁니다.
 - **3.3.0**: 맥 앱과 윈도우 프로그램의 기능을 모두 같게 맞췄습니다. 원본 색 살림·원본 직행 방식, 선 추출 AI, AI 보정 탭(PixelLab·Gemini·OpenAI), 설명서 탭, JEV 선·색 비교와 자동 선택. 윈도우는 인터넷 없이도 AI 업스케일이 되고, 실패하면 업스케일 없이 도트화합니다.
@@ -83,7 +88,7 @@ npm run dist       # 설치 파일 만들기: release/ 에 윈도우 .exe 와 �
 
 [MIT](LICENSE). 함께 쓰는 AI 파일은 각자의 라이선스를 따릅니다.
 
-- AI 업스케일: [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) RealESRGAN_x4plus_anime_6B · realesr-animevideov3 (BSD-3-Clause) — `desktop/models/`는 ONNX로 바꾼 것
+- AI 업스케일: [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) RealESRGAN_x4plus_anime_6B · realesr-animevideov3 (BSD-3-Clause) — ONNX로 바꿔 [models-esrgan 릴리스](https://github.com/YSoung99/dotmaker/releases/tag/models-esrgan)에 올린 것
 - 배경 분리: [skytnt/anime-seg](https://huggingface.co/skytnt/anime-seg) (Apache-2.0)
 - 선 추출: [p1atdev/MangaLineExtraction-hf](https://huggingface.co/p1atdev/MangaLineExtraction-hf) (MIT) — `src/lines-graph.onnx`는 이 모델의 구조를 ONNX로 옮긴 것
 - 실행 도구: [onnxruntime-web](https://github.com/microsoft/onnxruntime) (MIT) · 프로그램 본체: [Electron](https://www.electronjs.org/) (MIT)

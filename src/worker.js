@@ -134,7 +134,7 @@ async function tryUpscale(image, model, progress) {
 /** 선 추출 AI는 베리 잉크·2.0 방식에서만 쓴다(원본 색 살림은 원본 선을 그대로 쓴다). */
 const wantsLines = settings => settings.aiLines && settings.method !== 'soft';
 
-/** 캐릭터 분리 + 축소. 밝은 단색·투명 배경이 아니면 맥판은 Vision으로, 웹 버전은 AI 모델로 배경을 지운다. */
+/** 캐릭터 분리 + 축소. 밝은 단색·투명 배경이 아니면 AI 모델로 배경을 지운다. */
 async function prepareAny(image, w, h, progress) {
   try {
     return { ...prepare(image, w, h), masked: null };
