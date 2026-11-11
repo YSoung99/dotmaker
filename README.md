@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🎨 도트메이커 (윈도우 프로그램 소스)
+# 🎨 도트메이커
 
 **캐릭터 그림을 넣으면 원본을 살린 도트(픽셀) 그림으로 바꿔 주는 프로그램**
 
@@ -12,10 +12,26 @@
 
 ## 💾 받기
 
-| 운영체제 | 받기 | 설치 방법 |
+[**최신 버전 받기 (Releases)**](https://github.com/YSoung99/dotmaker/releases/latest) — 윈도우용과 맥용이 한 페이지에 같이 있습니다.
+
+| 운영체제 | 받을 파일 | 설치 방법 |
 |---|---|---|
-| **윈도우** 10/11 (64비트) | [Releases](https://github.com/YSoung99/dotmaker/releases/latest)의 `DotMaker-…-win-x64.exe` | 받은 파일을 실행 → 설치 위치 고르고 **설치**. "Windows의 PC 보호" 창이 뜨면 **추가 정보 → 실행** |
-| **맥** (Apple Silicon, macOS 14 이상) | [YSoung99/dotmaker-mac](https://github.com/YSoung99/dotmaker-mac/releases/latest) | 압축을 풀어 앱을 **응용 프로그램** 폴더로 옮긴 뒤 `xattr -dr com.apple.quarantine "<앱 경로>"` 한 번 실행 |
+| **윈도우** 10/11 (64비트) | `DotMaker-…-win-x64.exe` | 받은 파일을 실행 → 설치 위치 고르고 **설치**. "Windows의 PC 보호" 창이 뜨면 **추가 정보 → 실행** |
+| **맥** (Apple Silicon, macOS 14 이상) | `DotMaker-…-mac-arm64.dmg` | 파일을 열어 **DotMaker**를 **응용 프로그램** 폴더로 끌어다 놓기. 처음 한 번 아래 명령 실행 |
+
+맥은 개발자 서명이 없는 앱이라, 처음 열기 전에 터미널에서 아래 명령을 한 번 실행하세요.
+
+```sh
+xattr -dr com.apple.quarantine /Applications/DotMaker.app
+```
+
+## 🚀 쓰는 법
+
+1. **이미지 열기…** 로 캐릭터 그림을 엽니다(창에 끌어다 놓아도 됩니다).
+2. **결과 크기**와 **도트화 방식**을 고르면 바로 다시 그립니다.
+3. **PNG 저장…** 으로 투명 배경 도트 그림을 저장합니다.
+
+자세한 설명은 프로그램 안의 **설명서** 탭에 있습니다.
 
 ## ✨ 할 수 있는 것
 
@@ -23,23 +39,39 @@
 - **AI 업스케일(ESRGAN)**: 도트화하기 전에 원본을 4배로 키워 흐린 선·잡티를 정리합니다. 자동(원본이 결과 크기의 4배보다 작을 때만) · 6B(더 깔끔) · v3(더 빠름) · 끄기 중에서 고르고, AI 보정 탭의 다시 그린 그림에도 적용됩니다. 모델은 프로그램에 들어 있습니다.
 - 바깥 외곽선 1픽셀(원본 선 색) · 원본 색 맞추기 · 경계 섞인 색 정리 · 작은 입선 보존, **JEV 부위별 진단 · 섞인 색 판정 · 선·색 비교 · 자동 선택**([LLM Gateway](https://llmgateway.io) API 키 필요, 판정할 때 그림이 전송되고 요금은 내 계정에 청구)
 - AI 보정: PixelLab · Gemini · OpenAI(각 서비스의 내 API 키 필요)
-- 맥 앱(dotmaker-mac)과 기능이 모두 같습니다.
+- 맥과 윈도우 프로그램은 **같은 코드로 만들어** 기능과 결과가 같습니다.
 - AI 실행 도구와 AI 업스케일 모델은 프로그램에 들어 있어 인터넷 없이 돌아갑니다. 색 배경 그림의 배경 분리 AI(약 168MB)만 처음 쓸 때 한 번 받습니다.
 - AI 업스케일이 어떤 이유로 실패하면 그림은 업스케일 없이 도트화하고, 상태줄에 'AI 업스케일 건너뜀'으로 알려 줍니다.
 
-## 🛠️ 직접 빌드하기
+## 🛠️ 고쳐서 쓰기
+
+맥·윈도우 프로그램이 이 저장소의 코드 하나로 만들어집니다. 한 번 고치면 양쪽에 똑같이 반영됩니다.
+
+| 바꾸고 싶은 것 | 고칠 곳 |
+|---|---|
+| 결과 크기 범위·간격·처음 크기 | [`src/settings.js`](src/settings.js) |
+| 프로그램 버전 | [`package.json`](package.json)의 `"version"` (화면과 설치 파일 이름에 자동 반영) |
+| 화면(버튼·문구·설명서) | `src/app.js`, `src/app.html` |
+| 도트화 계산 | `src/core.js` |
+| AI(업스케일·배경 분리·선 추출) | `src/ai.js`, `src/worker.js` |
+| AI 보정(클라우드)·JEV | `src/cloud.js`, `src/jev-app.js`, `src/jev-core.js` |
+| 프로그램 창·키 저장 | `desktop/main.cjs` |
 
 Node.js 18 이상이 필요합니다.
 
 ```bash
-npm install
-npm run dist:win   # src/ → dist/도트메이커.html → release/DotMaker-…-win-x64.exe
+npm install        # 처음 한 번
+npm start          # 고친 내용을 바로 실행해 보기
+npm run dist       # 설치 파일 만들기: release/ 에 윈도우 .exe 와 맥 .dmg (맥에서 실행)
 ```
+
+`npm run dist:win`, `npm run dist:mac`으로 한쪽만 만들 수도 있습니다. `dist/`와 `release/`는 만들어지는 파일이라 저장소에 올리지 않습니다.
 
 `desktop/models/`의 AI 업스케일 모델은 [dotmaker-mac의 scripts/export-esrgan.py](https://github.com/YSoung99/dotmaker-mac/blob/main/scripts/export-esrgan.py)로 공식 가중치에서 다시 만들 수 있습니다.
 
-## 업데이트 기록
+## 📝 업데이트 기록
 
+- **3.5.0**: 맥과 윈도우 프로그램을 **코드 하나로 통합**했습니다. 받는 곳도 이 저장소 한 곳입니다. 맥 앱은 `DotMaker.app`(.dmg)으로 바뀌었고 결과는 예전 맥 앱과 같습니다. 자주 바꾸는 값은 `src/settings.js`에 모았습니다.
 - **3.4.0**: 결과 크기를 **50×50부터** 고를 수 있습니다(50 ~ 200, 10px 단위). 도트화 탭과 AI 보정 탭이 같은 크기를 씁니다.
 - **3.3.0**: 맥 앱과 윈도우 프로그램의 기능을 모두 같게 맞췄습니다. 원본 색 살림·원본 직행 방식, 선 추출 AI, AI 보정 탭(PixelLab·Gemini·OpenAI), 설명서 탭, JEV 선·색 비교와 자동 선택. 윈도우는 인터넷 없이도 AI 업스케일이 되고, 실패하면 업스케일 없이 도트화합니다.
 - **3.2.1**(윈도우): 인터넷 없이도 AI 업스케일, 업스케일이 실패해도 그림은 열기.
@@ -57,3 +89,5 @@ npm run dist:win   # src/ → dist/도트메이커.html → release/DotMaker-…
 - 실행 도구: [onnxruntime-web](https://github.com/microsoft/onnxruntime) (MIT) · 프로그램 본체: [Electron](https://www.electronjs.org/) (MIT)
 
 README의 예시 고양이 그림은 이 저장소용으로 새로 그린 것입니다.
+
+> 예전 맥 전용 앱(Swift) 소스는 [YSoung99/dotmaker-mac](https://github.com/YSoung99/dotmaker-mac)에 보관되어 있습니다(3.4.0까지). 브라우저로 여는 웹 버전(2.9.0)은 2026-11-10에 배포를 끝냈습니다.

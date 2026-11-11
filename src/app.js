@@ -1,5 +1,5 @@
 // 도트메이커 웹 버전 화면. 변환·AI는 작업자(worker.js)가 하고, 여기서는 열기·설정·미리보기·저장·설명서만 한다.
-const VERSION = '3.4.0';
+const VERSION = '__VERSION__';  // tools/build.mjs가 package.json의 버전을 넣는다
 const STAGES = {
   dot: { name: '도트화', instruction: '머리와 몸통을 구분해 검은 윤곽과 몸통 경계색을 적용합니다.' },
   repair: { name: 'AI 보정', instruction: '클라우드 AI(PixelLab·Gemini·OpenAI)에 캐릭터를 보내 도트 그림으로 다시 그립니다. 쓰려면 그 서비스의 내 API 키가 필요합니다.' },
@@ -13,8 +13,8 @@ const store = {
 
 const state = {
   stage: 'dot',
-  width: '100',
-  height: '100',
+  width: String(SETTINGS.size.initial),
+  height: String(SETTINGS.size.initial),
   settings: defaultSettings(),
   exportScale: [1, 2, 4, 8].includes(store.get('exportScale', 1)) ? store.get('exportScale', 1) : 1,
   original: null,   // 원본 미리보기 { w, h, bytes }
@@ -410,12 +410,18 @@ function toggle(text, checked, onChange, disabled, title = '') {
   return el('label', { className: 'toggle', title }, input, document.createTextNode(text));
 }
 
+function sizeChoices() {
+  const { min, max, step } = SETTINGS.size, choices = [];
+  for (let v = min; v <= max; v += step) choices.push(v);
+  return choices;
+}
+
 function controls(stage) {
   if (stage === 'repair') return cloudControls();
   const busy = Boolean(state.busy), loaded = Boolean(state.product);
-  // 결과 크기: 50×50 ~ 200×200(10px 단위, 정사각형). 고르면 바로 다시 그린다.
+  // 결과 크기(정사각형, 범위는 settings.js). 고르면 바로 다시 그린다.
   const sizeSelect = el('select', { disabled: busy, onchange: event => { state.width = state.height = event.target.value; resize(); } },
-    ...Array.from({ length: 16 }, (_, k) => 50 + k * 10).map(v => el('option', { value: String(v), textContent: `${v}×${v}`, selected: String(v) === state.width })));
+    ...sizeChoices().map(v => el('option', { value: String(v), textContent: `${v}×${v}`, selected: String(v) === state.width })));
   sizeSelect.setAttribute('aria-label', '결과 크기');
   const sizeRow = row(labelled('결과 크기', sizeSelect), upscaleControl());
   if (stage === 'dot') {
@@ -610,7 +616,7 @@ function helpScreen() {
   return el('div', { className: 'screen help' },
     section('시작하기', list([
       '<b>이미지 열기…</b>를 누르거나 이미지를 창에 끌어다 놓습니다. <kbd>Ctrl</kbd>+<kbd>O</kbd>',
-      '<b>결과 크기</b>: 50×50 ~ 200×200(10px 단위)에서 고르면 바로 다시 그립니다. 배경은 자동으로 지우고 캐릭터를 캔버스에 맞춥니다.',
+      `<b>결과 크기</b>: ${SETTINGS.size.min}×${SETTINGS.size.min} ~ ${SETTINGS.size.max}×${SETTINGS.size.max}(${SETTINGS.size.step}px 단위)에서 고르면 바로 다시 그립니다. 배경은 자동으로 지우고 캐릭터를 캔버스에 맞춥니다.`,
       '<b>도트화</b> 탭: 설정을 바꾸면 바로 다시 계산합니다. 계산 중에도 설정을 바꿀 수 있고, 마지막 설정으로 결과가 나옵니다.',
       '<b>PNG 저장…</b>: 지금 탭의 결과를 저장합니다. <kbd>Ctrl</kbd>+<kbd>S</kbd> · 저장 배율(1·2·4·8배)은 번짐 없이 키우고, 다음에도 기억합니다.',
     ])),
