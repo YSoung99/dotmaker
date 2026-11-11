@@ -521,6 +521,24 @@ function sizeChoices() {
   return choices;
 }
 
+/** 모든 도트화 방식 공통 마무리 설정. */
+function finishRow(off) {
+  const s = state.settings;
+  const palette = el('select', { disabled: off, onchange: event => setSetting('palette', event.target.value) },
+    ...[['off', '끄기'], ...Object.entries(PALETTES).map(([id, p]) => [id, p.name]), ['custom', '직접 입력']]
+      .map(([value, textContent]) => el('option', { value, textContent, selected: value === s.palette })));
+  palette.setAttribute('aria-label', '팔레트 고정');
+  const custom = s.palette === 'custom' && el('input', { type: 'text', className: 'palette', value: s.paletteCustom, disabled: off, spellcheck: false,
+    placeholder: '예: #1a1c2c, #f4f4f4, ff77a8', onchange: event => setSetting('paletteCustom', event.target.value) });
+  if (custom) custom.setAttribute('aria-label', '팔레트 색');
+  return row(
+    toggle('가장자리 반투명 없애기', s.hardEdge, v => setSetting('hardEdge', v), off,
+      '테두리의 반투명 칸을 절반 이상 덮였으면 불투명, 아니면 투명으로 딱 자릅니다. 색 배경 위에 올려도 테두리가 흐리지 않습니다.'),
+    toggle('외톨이 점 정리', s.lonePixels, v => setSetting('lonePixels', v), off,
+      '둘레 어느 칸과도 색이 크게 다른 한 칸짜리 점을 둘레 색으로 바꿉니다. 선과 눈 하이라이트는 두지만, 작은 장식 점이 사라질 수 있습니다.'),
+    labelled('팔레트 고정', palette), custom);
+}
+
 function controls(stage) {
   if (stage === 'repair') return cloudControls();
   const busy = Boolean(state.busy), loaded = Boolean(state.product);
@@ -535,7 +553,9 @@ function controls(stage) {
     const methods = segmented([['faithful', '원본 보존'], ['soft', '원본 색 살림'], ['berry', '베리 잉크'], ['basic', '2.0 방식'], ['direct', '원본 직행']], s.method, v => setSetting('method', v), off, '도트화 방식');
     if (s.method === 'faithful') {
       return el('div', { className: 'stack' }, sizeRow, row(methods),
-        row(toggle('바깥 외곽선 1픽셀(원본 선 색)', s.crispOutline, v => setSetting('crispOutline', v), off,
+        row(toggle('또렷하게(작은 크기용)', s.sharpCells, v => setSetting('sharpCells', v), off,
+          '칸 색을 평균 내지 않고 선 색이나 면 색 하나로 고릅니다. 작은 결과 크기에서 눈·입·무늬가 회색으로 뭉개지는 것을 줄입니다. 큰 크기에서는 선이 거칠어질 수 있습니다.'),
+        toggle('바깥 외곽선 1픽셀(원본 선 색)', s.crispOutline, v => setSetting('crispOutline', v), off,
           '투명 배경 바로 앞 가장 바깥 칸만, 원본 그 자리에 선이 있으면 원본 선 색으로 칠하고 그 바깥의 흐린 칸을 지웁니다. 흰 외곽선 장식과 바닥 그림자는 그대로 둡니다.'),
         toggle('원본 색 맞추기', s.snapColors, v => setSetting('snapColors', v), off,
           '축소하면서 생긴 탁한 중간색 대신, 그 칸 원본에 실제로 있는 가장 가까운 색을 넣습니다.'),
@@ -543,7 +563,7 @@ function controls(stage) {
           '축소하면서 경계에 생긴 탁한 중간색(빨강+검정 → 자주 등)을 가까운 원래 색으로 바꿉니다. 부드러운 명암은 건드리지 않습니다.'),
         toggle('작은 입선 보존', s.preserveMouth, v => setSetting('preserveMouth', v), off,
           '눈 두 개 사이 아래의 작은 입 선(ω 등)이 회색으로 뭉개지지 않게 원본 선 색으로 살립니다.')),
-        jevControls());
+        finishRow(off), jevControls());
     }
     // 원본 색 살림은 원본 선을 그대로 살리는 방식이라 외곽선·선 추출·경계색을 쓰지 않는다.
     const colorStepper = soft
@@ -556,7 +576,9 @@ function controls(stage) {
         toggle('선명하게', s.softVivid, v => setSetting('softVivid', v), off,
           '분홍·보라 같은 색의 채도를 25% 올려 또렷하게 합니다. 흰색·검정·회색은 그대로입니다.'),
         toggle('테두리·색 면 정리', s.softClean, v => setSetting('softClean', v), off,
-          '바깥 테두리를 끊김 없는 순검정 1px로 잇고, 거의 같은 색을 합치고 혼자 떨어진 점을 지웁니다.')),
+          '바깥 테두리를 끊김 없는 순검정 1px로 잇고, 거의 같은 색을 합치고 혼자 떨어진 점을 지웁니다.'),
+        toggle('강조색 지키기', s.keepAccents, v => setSetting('keepAccents', v), off,
+          '면적이 작아 색 줄이기에서 빠진 또렷한 색(눈 하이라이트·작은 장식)을 최대 3색까지 더 남깁니다.')),
       row(colorStepper,
         labelled('색 정리', segmented([[0, '끄기'], [1, '보통'], [2, '강하게']], s.cleanup, v => setSetting('cleanup', v), off || (s.method !== 'basic' && s.method !== 'direct'), '색 정리'))),
       row(labelled('검은 외곽선', segmented([[1, '1줄'], [2, '2줄']], s.width, v => setSetting('width', v), off || soft, '검은 외곽선'))),
@@ -565,6 +587,7 @@ function controls(stage) {
       row(toggle('몸통 경계색', s.boundary, v => setSetting('boundary', v), off || soft),
         stepper(`투명도 ${s.transparency}%`, s.transparency, 0, 100, 5, v => setSetting('transparency', v), off || soft || !s.boundary)),
       soft && el('p', { className: 'note', textContent: '원본 색 살림: 원본의 색을 살리고 색 수만 줄입니다. 외곽선·선 추출·경계색은 베리 잉크·2.0 방식·원본 직행에서 씁니다.' }),
+      finishRow(off),
       jevAutoControls(),
     );
   }
@@ -739,6 +762,9 @@ function helpScreen() {
       '결과 크기·도트화 방식·AI 업스케일·체크 항목·저장 배율은 <b>다음에 켤 때도 그대로</b>입니다.',
     ])),
     section('도트화 설정', list([
+      '<b>또렷하게(작은 크기용)</b>(원본 보존): 칸 색을 평균 내지 않고 선 색이나 면 색 하나로 골라, 50×50처럼 작은 크기에서 눈·입·무늬가 뭉개지는 것을 줄입니다.',
+      '<b>가장자리 반투명 없애기 · 외톨이 점 정리 · 팔레트 고정</b>: 모든 방식에 마지막으로 적용합니다. 팔레트 고정은 정해 둔 색만 쓰게 해 여러 그림의 색감을 맞춥니다(직접 입력은 16진수 색을 쉼표로).',
+      '<b>강조색 지키기</b>(원본 색 살림): 색 줄이기에서 빠진 작은 강조색을 최대 3색 더 남깁니다.',
       '<b>AI 업스케일(ESRGAN)</b>: 도트화하기 전에 원본을 Real-ESRGAN으로 4배 키워 흐린 선과 잡티를 정리합니다. 자동은 원본이 결과 크기의 4배보다 작을 때만 켭니다. 6B는 더 깔끔하고, v3는 더 빠릅니다.',
       '<b>원본 보존</b>(기본): 원본 픽셀이 결과 격자 한 칸에 걸치는 넓이만큼 그대로 평균 내서, 선 굵기와 명암을 살린 투명 PNG를 만듭니다. 투명 배경 그림은 떨어진 장식까지 그대로 둡니다.',
       '<b>바깥 외곽선 1픽셀(원본 선 색)</b>(원본 보존): 투명 배경 바로 앞 가장 바깥 칸만, 원본 그 자리에 선이 있으면 원본 선 색으로 칠하고 그 바깥의 흐린 칸을 지웁니다. 흰 외곽선 장식과 발밑 그림자는 그대로 둡니다.',

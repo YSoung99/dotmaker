@@ -408,7 +408,8 @@ export function reduce(subject, w, h) {
 // method: 'berry' 베리 잉크 · 'basic' 2.0 방식 · 'soft' 원본 색 살림(개선판 '약하게', 색 수는 softColors)
 // softLines: 원본 색 살림에서 선을 1픽셀로 정리(원본에서 선 줄기 찾기) · softVivid: 원본 색 살림에서 채도 25% 올리기
 // softClean: 원본 색 살림에서 바깥 테두리를 순검정 1px로 잇고 색 면 정리(비슷한 색 합치기·혼자 떨어진 점 지우기)
-export const defaultSettings = () => ({ width: 1, boundary: true, transparency: 80, colors: 12, cleanup: 1, method: 'faithful', aiLines: false, softColors: 24, softLines: true, softVivid: true, softClean: true, crispOutline: false, cleanBlends: false, snapColors: false, preserveMouth: false, upscale: 'auto' });
+export const defaultSettings = () => ({ width: 1, boundary: true, transparency: 80, colors: 12, cleanup: 1, method: 'faithful', aiLines: false, softColors: 24, softLines: true, softVivid: true, softClean: true, crispOutline: false, cleanBlends: false, snapColors: false, preserveMouth: false, upscale: 'auto',
+  sharpCells: false, hardEdge: false, lonePixels: false, keepAccents: false, palette: 'off', paletteCustom: '' });
 
 class Palette {
   constructor(pixels) {
@@ -1204,6 +1205,33 @@ function buildPalette(pixels, count) {
   return palette;
 }
 
+/**
+ * 강조색 지키기(원본 색 살림): 면적이 작아 팔레트에서 빠진 또렷한 색(눈 하이라이트·작은 장식)을
+ * 최대 3개까지 팔레트에 더한다.
+ */
+function addAccents(palette, pixels) {
+  const bins = new Map();
+  for (const pixel of pixels) {
+    if (!(pixel.alpha > F(0.5))) continue;
+    if (len2(pixel.color[1], pixel.color[2]) < 0.07) continue;
+    if (Math.sqrt(dist2(pixel.color, palette[nearestLab(pixel.color, palette)])) < 0.07) continue;
+    const key = (roundAway(pixel.color[0] * 12) << 12) | (roundAway((pixel.color[1] + 0.5) * 16) << 6) | roundAway((pixel.color[2] + 0.5) * 16);
+    let bin = bins.get(key);
+    if (!bin) bins.set(key, bin = { total: ZERO(), count: 0 });
+    bin.total = vadd(bin.total, pixel.color);
+    bin.count++;
+  }
+  const found = [...bins.values()].filter(bin => bin.count >= 2).sort((a, b) => b.count - a.count);
+  let added = 0;
+  for (const bin of found) {
+    if (added >= 3) break;
+    const color = vdiv(bin.total, bin.count);
+    if (Math.sqrt(dist2(color, palette[nearestLab(color, palette)])) < 0.07) continue;
+    palette.push(color);
+    added++;
+  }
+}
+
 function nearestLab(color, palette) {
   let winner = 0, closest = Infinity;
   for (let index = 0; index < palette.length; index++) {
@@ -1895,6 +1923,7 @@ export function renderSoft(subject, w, h, settings) {
   const bytes = rasterize(prepared, sw, sh, { x: 0, y: 0, w: sw, h: sh });
   const pixels = choosePixels(bytes, sw * 4, fitted.w, fitted.h);
   const palette = buildPalette(pixels, Math.max(2, Math.min(64, settings.softColors)));
+  if (settings.keepAccents && palette.length > 0) addAccents(palette, pixels);
   const encoded = palette.map(encodeSRGB);
   const out = new Uint8Array(w * h * 4);
   for (let y = 0; y < fitted.h; y++) for (let x = 0; x < fitted.w; x++) {
@@ -2050,7 +2079,129 @@ export function prepare(original, w, h, masked = null, faithful = false) {
   const subject = Subject.extract(original, masked, faithful);
   return { subject, reduced: faithful ? reduceDirect(subject, w, h) : reduce(subject, w, h) };
 }
+/**
+ * 또렷하게(원본 보존): 칸 색을 평균 내지 않고 선 색(ink)이나 면 색(fill) 하나로 고른다.
+ * 작은 결과 크기에서 눈·입·무늬가 회색으로 뭉개지는 것을 줄인다.
+ * - 둘레(3×3)보다 뚜렷이 어둡고 양옆(또는 위아래)보다 진한 줄기 칸 → 선 (밝은 바탕의 가는 선)
+ * - 둘레보다 뚜렷이 밝고 양옆(또는 위아래)보다 옅은 골 칸 → 면 (어두운 바탕의 밝은 무늬)
+ * - 그 밖에는 어두운 쪽이 절반을 넘으면 선, 아니면 면
+ * 안쪽 선은 칸을 차지한 만큼만 진하게, 바깥 테두리 선은 진하고 끊기지 않게 그린다.
+ */
+export function sharpCells(reduced) {
+  const input = reduced.image, w = input.grid.w, h = input.grid.h, cells = reduced.cells, output = input.clone();
+  const covered = (x, y) => x >= 0 && y >= 0 && x < w && y < h && cells[y * w + x].cover > 0;
+  const dark = (x, y, other) => (covered(x, y) ? cells[y * w + x].dark : other);
+  const lines = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x, cell = cells[i];
+    if (!(cell.cover > 0)) continue;
+    const d = cell.dark;
+    let sum = 0, count = 0;
+    for (let v = -1; v <= 1; v++) for (let u = -1; u <= 1; u++) if (covered(x + u, y + v)) { sum += cells[(y + v) * w + x + u].dark; count++; }
+    // 바깥 테두리 칸: 둘레에 빈 칸이 있다. 빈 칸은 '어둡지 않은 칸'으로 쳐야 테두리 선이 주변 선 칸에 묻혀 끊기지 않는다.
+    const rim = count < 9;
+    const around = sum / count, aroundOpen = sum / 9;
+    const ridge = (d > dark(x - 1, y, 0) && d >= dark(x + 1, y, 0)) || (d > dark(x, y - 1, 0) && d >= dark(x, y + 1, 0));
+    const valley = (d < dark(x - 1, y, 100) && d <= dark(x + 1, y, 100)) || (d < dark(x, y - 1, 100) && d <= dark(x, y + 1, 100));
+    const thin = d < 50 && ridge && d >= 14 && d - aroundOpen >= 4;
+    const line = d >= 86 ? true : d <= 6 ? false
+      : thin ? true
+      : valley && d <= 86 && around - d >= 4 ? false
+      : d >= 50;
+    // 안쪽 선은 칸을 차지한 만큼만 진하게(선 색을 면 색에 섞어) 그려 작은 크기에서 선이 그림을 덮지 않게 하고, 바깥 테두리 선은 진하게 둔다.
+    const color = !line ? cell.fill : !rim && d < 86 ? mixed(cell.fill, cell.ink, 40 + Math.trunc((d - 14) * 60 / 72)) : cell.ink;
+    output.px[i] = withAlpha(color, A(input.px[i]));
+    lines[i] = line ? 1 : 0;
+  }
+  // 반쯤 투명한 테두리 칸에 걸린 외곽선은 흐리게 보여 선이 끊긴 것처럼 된다. 안쪽에 이미 또렷한 선이 받치고 있지 않으면 불투명하게 올린다.
+  const alpha = (x, y) => (x < 0 || y < 0 || x >= w || y >= h ? 0 : A(input.px[y * w + x]));
+  const solidLine = (x, y) => alpha(x, y) >= 200 && lines[y * w + x] === 1;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x, a = A(input.px[i]);
+    if (a < 64) continue;
+    const sides = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    const backed = sides.some(([u, v]) => solidLine(x + u, y + v) && alpha(x - u, y - v) < 64);
+    if (backed) continue;
+    if (lines[i] === 1) { if (a < 200) output.px[i] = withAlpha(output.px[i], 255); continue; }
+    // 선으로 뽑히지 않았어도, 맨 바깥 칸에 선이 조금이라도 걸려 있으면 선으로 이어 외곽선이 끊기지 않게 한다.
+    if (cells[i].dark >= 8 && sides.some(([u, v]) => alpha(x + u, y + v) < 64)) output.px[i] = withAlpha(cells[i].ink, 255);
+  }
+  return output;
+}
+
+/** 가장자리 반투명 없애기: 절반 이상 덮인 칸은 불투명, 아니면 투명. */
+export function hardEdge(input) {
+  const output = input.clone();
+  for (let i = 0; i < output.px.length; i++) output.px[i] = A(output.px[i]) >= 128 ? withAlpha(output.px[i], 255) : CLEAR;
+  return output;
+}
+
+/**
+ * 외톨이 점 정리: 둘레 어느 칸과도 색이 크게 다른 한 칸짜리 점을 둘레에서 가장 많은 색으로 바꾼다.
+ * 선(어두운 칸)과, 어두운 칸에 둘러싸인 밝은 점(눈 하이라이트)은 건드리지 않는다.
+ */
+export function lonePixels(input) {
+  const output = input.clone(), grid = input.grid, px = input.px;
+  for (let i = 0; i < grid.count; i++) {
+    const p = px[i];
+    if (A(p) < 128 || light(p) < 110) continue;
+    const around = [];
+    grid.each8(i, j => { if (A(px[j]) >= 128) around.push(px[j]); });
+    if (around.length < 6 || around.filter(q => light(q) < 110).length * 2 >= around.length) continue;
+    if (around.some(q => distance(p, q) < 3600)) continue;
+    const counts = new Map();
+    for (const q of around) if (light(q) >= 110) counts.set(KEY(q), (counts.get(KEY(q)) ?? 0) + 1);
+    let best = null, bestCount = 0;
+    for (const q of around) { const n = counts.get(KEY(q)) ?? 0; if (n > bestCount) { best = q; bestCount = n; } }
+    if (best !== null) output.px[i] = withAlpha(best, A(p));
+  }
+  return output;
+}
+
+/** 고정 팔레트. 여기에 줄을 더하면 '팔레트 고정' 목록에 나온다(이름, 16진수 색 목록). */
+export const PALETTES = {
+  pico8: { name: 'PICO-8 (16색)', colors: '000000 1D2B53 7E2553 008751 AB5236 5F574F C2C3C7 FFF1E8 FF004D FFA300 FFEC27 00E436 29ADFF 83769C FF77A8 FFCCAA' },
+  sweetie16: { name: 'Sweetie 16 (16색)', colors: '1a1c2c 5d275d b13e53 ef7d57 ffcd75 a7f070 38b764 257179 29366f 3b5dc9 41a6f6 73eff7 f4f4f4 94b0c2 566c86 333c57' },
+  gameboy: { name: '게임보이 (4색)', colors: '0f380f 306230 8bac0f 9bbc0f' },
+};
+/** '#ff0000, 00ff00 …'처럼 적은 16진수 색 목록을 읽는다(6자리만). */
+export function parsePalette(text) {
+  return (String(text).match(/[0-9a-fA-F]{6}/g) ?? []).map(hex => pack(parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)));
+}
+export function paletteColors(settings) {
+  if (settings.palette === 'custom') return parsePalette(settings.paletteCustom);
+  return PALETTES[settings.palette] ? parsePalette(PALETTES[settings.palette].colors) : [];
+}
+/** 팔레트 고정: 모든 칸을 팔레트에서 가장 가까운 색으로 바꾼다(투명도는 그대로). */
+export function lockPalette(input, colors) {
+  if (colors.length === 0) return input;
+  const output = input.clone(), cache = new Map();
+  for (let i = 0; i < output.px.length; i++) {
+    const p = output.px[i];
+    if (A(p) === 0) continue;
+    let pick = cache.get(KEY(p));
+    if (pick === undefined) {
+      let closest = Infinity;
+      for (const c of colors) { const d = distance(p, c); if (d < closest) { closest = d; pick = c; } }
+      cache.set(KEY(p), pick);
+    }
+    output.px[i] = withAlpha(pick, A(p));
+  }
+  return output;
+}
+
+/** 모든 방식 공통 마무리: 외톨이 점 정리 → 팔레트 고정 → 가장자리 반투명 없애기. */
+function finishDot(result, settings) {
+  let image = result.image;
+  if (settings.lonePixels) image = lonePixels(image);
+  if (settings.palette && settings.palette !== 'off') image = lockPalette(image, paletteColors(settings));
+  if (settings.hardEdge) image = hardEdge(image);
+  return image === result.image ? result : { ...result, image };
+}
 export function render(subject, reduced, settings, lines = null) {
+  return finishDot(renderMethod(subject, reduced, settings, lines), settings);
+}
+function renderMethod(subject, reduced, settings, lines = null) {
   if (settings.method === 'faithful') return renderFaithful(reduced, settings, subject);
   const guide = settings.aiLines ? lines : null;
   const w = reduced.image.grid.w, h = reduced.image.grid.h;
@@ -2059,8 +2210,12 @@ export function render(subject, reduced, settings, lines = null) {
   return settings.method === 'basic' || settings.method === 'direct' ? renderBasic(reduced, settings, guide) : renderBerry(subject, w, h, settings, guide);
 }
 export function dotStatus(settings, dotted) {
+  const done = [settings.lonePixels && '외톨이 점 정리', settings.palette && settings.palette !== 'off' && paletteColors(settings).length > 0 && '팔레트 고정', settings.hardEdge && '가장자리 또렷'].filter(Boolean);
+  return methodStatus(settings, dotted) + (done.length ? '  ·  ' + done.join(' · ') : '');
+}
+function methodStatus(settings, dotted) {
   if (settings.method === 'faithful') {
-    const extras = [settings.snapColors && '원본 색 맞추기', settings.cleanBlends && '경계 섞인 색 정리', settings.preserveMouth && '작은 입선 보존', settings.crispOutline && '바깥 외곽선 원본 선 색'].filter(Boolean);
+    const extras = [settings.sharpCells && '또렷하게', settings.snapColors && '원본 색 맞추기', settings.cleanBlends && '경계 섞인 색 정리', settings.preserveMouth && '작은 입선 보존', settings.crispOutline && '바깥 외곽선 원본 선 색'].filter(Boolean);
     return `원본 보존  ·  ${dotted.image.grid.w}×${dotted.image.grid.h} px  ·  투명 PNG${extras.length ? '  ·  ' + extras.join(' · ') : ''}`;
   }
   const colors = `실제 ${ColorReducer.count(dotted.image)}색`;
@@ -2224,7 +2379,7 @@ export function crispOutline(input, cells = null) {
 }
 
 export function renderFaithful(reduced, settings, subject) {
-  let image = reduced.image;
+  let image = settings.sharpCells ? sharpCells(reduced) : reduced.image;
   if (settings.snapColors) image = snapColors(image, reduced, subject);
   if (settings.cleanBlends) image = cleanBlends(image);
   if (settings.preserveMouth) { image = image.clone(); FaceDetail.preserveMouth(image, reduced); }
