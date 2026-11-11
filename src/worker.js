@@ -1,6 +1,6 @@
 // 작업자(Web Worker): 변환과 AI를 화면과 따로 돌려 처리 중에도 창이 멈추지 않게 한다.
 // 일은 들어온 순서대로 하나씩 한다. 원본·캐릭터·선 지도는 여기 두고, 화면에는 결과 그림만 보낸다.
-let current = null; // { raw, wanted, upscaled, skipped, original, masked, subject, reduced, lines, faithful }
+let current = null; // { raw, wanted, upscaled, skipped, original, masked, subject, reduced, lines, faithful, whole }
 
 const picture = raster => ({ w: raster.grid.w, h: raster.grid.h, bytes: raster.straightBytes() });
 
@@ -8,7 +8,7 @@ const picture = raster => ({ w: raster.grid.w, h: raster.grid.h, bytes: raster.s
 function faithfulParts() {
   const { w, h } = current.reduced.image.grid;
   if (!current.faithful || current.faithful.w !== w || current.faithful.h !== h) {
-    const subject = Subject.extract(current.original, current.masked, true);
+    const subject = current.whole ? Subject.whole(current.original) : Subject.extract(current.original, current.masked, true);
     current.faithful = { w, h, subject, reduced: reduceDirect(subject, w, h) };
   }
   return current.faithful;
@@ -29,7 +29,8 @@ function finish(id, settings) {
   const reduced = picture(parts.reduced.image), dot = picture(dotted.image);
   const sharpened = current.upscaled ? ` · AI 업스케일 ${current.upscaled === 'esr6b' ? '6B' : 'v3'}`
     : current.skipped ? ` · AI 업스케일 건너뜀(${current.skipped})` : '';
-  self.postMessage({ id, type: 'done', reduced, dotted: dot, status: dotStatus(settings, dotted) + sharpened },
+  const whole = current.whole ? ' · 배경 분리 없이 그대로' : '';
+  self.postMessage({ id, type: 'done', reduced, dotted: dot, status: dotStatus(settings, dotted) + sharpened + whole },
     [reduced.bytes.buffer, dot.bytes.buffer]);
 }
 
@@ -38,12 +39,12 @@ async function handle(job) {
   try {
     if (job.type === 'open') {
       const { original, w, h, settings } = job;
-      current = await load(original, w, h, settings, progress);
+      current = await load(original, w, h, settings, progress, Boolean(job.whole));
       finish(job.id, settings);
     } else if (job.type === 'resize') {
       // 결과 크기가 바뀌면 '자동' AI 업스케일을 쓸지가 달라질 수 있다.
       if (upscaleModel(current.raw, job.settings.upscale, Math.max(job.w, job.h)) !== current.wanted) {
-        current = await load(current.raw, job.w, job.h, job.settings, progress);
+        current = await load(current.raw, job.w, job.h, job.settings, progress, current.whole);
       } else {
         current = { ...current, reduced: reduce(current.subject, job.w, job.h) };
       }
@@ -107,17 +108,24 @@ async function handle(job) {
   } catch (error) {
     console.error(error);
     const message = error instanceof DotError ? error.message : `${Errors.render} (${error.message})`;
-    self.postMessage({ id: job.id, type: 'error', message });
+    self.postMessage({ id: job.id, type: 'error', message, canSkip: Boolean(error.canSkip) });
   }
 }
 
 /** 원본 → (AI 업스케일) → 캐릭터 분리·축소·선 지도. raw는 처음 연 원본이고, AI 업스케일 설정이 바뀌면 여기서 다시 시작한다. */
-async function load(raw, w, h, settings, progress) {
+async function load(raw, w, h, settings, progress, whole = false) {
   const wanted = upscaleModel(raw, settings.upscale, Math.max(w, h));
   const { image: original, upscaled, skipped } = await tryUpscale(raw, wanted, progress);
-  const prepared = await prepareAny(original, w, h, progress);
+  let prepared;
+  try {
+    prepared = whole ? { ...prepare(original, w, h, null, false, true), masked: null } : await prepareAny(original, w, h, progress);
+  } catch (error) {
+    // 캐릭터 분리(배경 지우기)에서 막힌 것이면 화면이 '분리 없이 그대로 변환'을 권할 수 있게 알린다.
+    error.canSkip = !whole;
+    throw error;
+  }
   const lines = wantsLines(settings) ? await extractLines(prepared.subject, progress) : null;
-  return { raw, wanted, upscaled, skipped, original, masked: prepared.masked, subject: prepared.subject, reduced: prepared.reduced, lines, faithful: null };
+  return { raw, wanted, upscaled, skipped, original, masked: prepared.masked, subject: prepared.subject, reduced: prepared.reduced, lines, faithful: null, whole };
 }
 
 /** AI 업스케일이 실패해도(파일을 못 받음 등) 그림은 연다: 키우지 않은 원본으로 도트화하고 이유를 남긴다. */

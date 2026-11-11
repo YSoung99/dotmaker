@@ -27,6 +27,7 @@ const state = {
   compare: false,   // 결과 자리에 원본을 같은 위치·크기로 보여 준다
   aligned: null,    // 비교용 원본 그림(결과 칸에 맞춘 것). 그림이나 크기가 바뀌면 다시 만든다
   notice: null,     // 여러 장 저장·복사 결과 안내
+  retryWhole: null, // 캐릭터 분리에 실패한 파일(‘분리 없이 그대로 변환’ 버튼용)
   exportScale: [1, 2, 4, 8].includes(store.get('exportScale', 1)) ? store.get('exportScale', 1) : 1,
   original: null,   // 원본 미리보기 { w, h, bytes }
   product: null,    // { reduced, dotted, status } — 그림은 { w, h, bytes }
@@ -77,7 +78,7 @@ const engine = (() => {
     worker.onmessage = ({ data }) => {
       if (!running || data.id !== running.id) return;
       if (data.type === 'progress') { state.busy = data.label; updateStatus(); return; }
-      if (data.type === 'error') { state.error = data.message; running.fail?.(data.message); }
+      if (data.type === 'error') { state.error = data.message; running.fail?.(data.message, data); }
       else running.apply(data);
       done();
     };
@@ -252,11 +253,13 @@ async function batch(files) {
   update();
 }
 
-async function open(file) {
+/** whole: 캐릭터 분리(배경 지우기)를 건너뛰고 그림 전체를 그대로 변환한다. */
+async function open(file, whole = false) {
   if (!file) return;
   const size = dimensions();
   if (!size) return;
   state.notice = null;
+  state.retryWhole = null;
   state.busy = '이미지 읽는 중';
   state.error = null;
   update();
@@ -271,7 +274,10 @@ async function open(file) {
   }
   const settings = { ...state.settings };
   submittedSettings = settings;
-  engine.submit('open', { original, w: size[0], h: size[1], settings }, '원본에서 캐릭터 분리 중', data => applyOpened(data, original, file.name));
+  engine.submit('open', { original, w: size[0], h: size[1], settings, whole }, whole ? '그림 전체를 그대로 변환 중' : '원본에서 캐릭터 분리 중',
+    data => applyOpened(data, original, file.name),
+    // 캐릭터 분리에 실패하면 그냥 끝내지 않고, 분리 없이 그대로 변환할지 고르게 한다.
+    (message, data) => { if (data?.canSkip) state.retryWhole = file; });
 }
 
 function resize() {
@@ -686,6 +692,11 @@ function statusLine(stage) {
   } else if (state.error) {
     status.classList.add('error');
     status.textContent = state.error;
+    if (state.retryWhole) {
+      const file = state.retryWhole;
+      status.append(el('button', { type: 'button', className: 'retry', textContent: '분리 없이 그대로 변환', onclick: () => open(file, true),
+        title: '배경을 지우지 않고 그림 전체를 그대로 도트로 바꿉니다.' }));
+    }
   } else if (state.notice) {
     status.textContent = state.notice;
   } else if (stage === 'dot' && state.product) {
@@ -762,6 +773,7 @@ function helpScreen() {
       '결과 크기·도트화 방식·AI 업스케일·체크 항목·저장 배율은 <b>다음에 켤 때도 그대로</b>입니다.',
     ])),
     section('도트화 설정', list([
+      '<b>캐릭터를 분리하지 못했을 때</b>: 오류 문구 옆의 <b>분리 없이 그대로 변환</b>을 누르면 배경을 지우지 않고 그림 전체를 그대로 도트로 바꿉니다.',
       '<b>또렷하게(작은 크기용)</b>(원본 보존): 칸 색을 평균 내지 않고 선 색이나 면 색 하나로 골라, 50×50처럼 작은 크기에서 눈·입·무늬가 뭉개지는 것을 줄입니다.',
       '<b>가장자리 반투명 없애기 · 외톨이 점 정리 · 팔레트 고정</b>: 모든 방식에 마지막으로 적용합니다. 팔레트 고정은 정해 둔 색만 쓰게 해 여러 그림의 색감을 맞춥니다(직접 입력은 16진수 색을 쉼표로).',
       '<b>강조색 지키기</b>(원본 색 살림): 색 줄이기에서 빠진 작은 강조색을 최대 3색 더 남깁니다.',

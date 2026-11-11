@@ -313,6 +313,10 @@ export const Subject = {
     for (let i = 0; i < grid.count; i++) if (!keep[i]) raster.px[i] = CLEAR;
     return cropVisible(raster);
   },
+  /** 분리 없이: 배경을 지우지 않고 그림 전체를 그대로 쓴다(캐릭터를 분리하지 못했을 때 사용자가 고름). */
+  whole(source) {
+    return cropVisible(Raster.from(source));
+  },
 };
 
 function cropVisible(raster) {
@@ -2075,8 +2079,8 @@ function oklabToRGB(L, a, b) {
 
 // ───────────────────────────── 앱이 쓰는 입구
 /** 원본(프리멀티플라이 이미지) → 캐릭터 → 축소 */
-export function prepare(original, w, h, masked = null, faithful = false) {
-  const subject = Subject.extract(original, masked, faithful);
+export function prepare(original, w, h, masked = null, faithful = false, whole = false) {
+  const subject = whole ? Subject.whole(original) : Subject.extract(original, masked, faithful);
   return { subject, reduced: faithful ? reduceDirect(subject, w, h) : reduce(subject, w, h) };
 }
 /**
