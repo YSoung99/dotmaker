@@ -267,6 +267,7 @@ function autoJev() {
     const verdict = await chooseJev(state.original, rendered.results.map(r => r.dotted), 'overall');
     const chosen = list[verdict.index], result = rendered.results[verdict.index];
     state.settings = chosen;
+    store.set('settings', chosen);
     submittedSettings = { ...chosen };
     state.product = { reduced: result.reduced, dotted: result.dotted,
       status: `JEV가 후보 ${list.length}개를 나란히 비교해 ‘${methodName[chosen.method]} ${chosen.colors}색’을 골랐습니다 (확률 ${Math.round(verdict.scores[verdict.index] * 100)}%).` };

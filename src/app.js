@@ -11,11 +11,22 @@ const store = {
   set(key, value) { try { localStorage.setItem('dotmaker.' + key, JSON.stringify(value)); } catch { /* 저장 못 해도 동작에는 지장 없음 */ } },
 };
 
+// 마지막에 쓰던 도트화 설정과 결과 크기를 다음에도 쓴다(없어진 항목·형식이 다른 값은 기본값으로).
+function savedSettings() {
+  const base = defaultSettings(), saved = store.get('settings', {}) ?? {};
+  for (const key of Object.keys(base)) if (typeof saved[key] === typeof base[key]) base[key] = saved[key];
+  return base;
+}
+const savedSize = () => String(sizeChoices().includes(store.get('size', null)) ? store.get('size', null) : SETTINGS.size.initial);
+
 const state = {
   stage: 'dot',
-  width: String(SETTINGS.size.initial),
-  height: String(SETTINGS.size.initial),
-  settings: defaultSettings(),
+  width: savedSize(),
+  height: savedSize(),
+  settings: savedSettings(),
+  compare: false,   // 결과 자리에 원본을 같은 위치·크기로 보여 준다
+  aligned: null,    // 비교용 원본 그림(결과 칸에 맞춘 것). 그림이나 크기가 바뀌면 다시 만든다
+  notice: null,     // 여러 장 저장·복사 결과 안내
   exportScale: [1, 2, 4, 8].includes(store.get('exportScale', 1)) ? store.get('exportScale', 1) : 1,
   original: null,   // 원본 미리보기 { w, h, bytes }
   product: null,    // { reduced, dotted, status } — 그림은 { w, h, bytes }
@@ -193,10 +204,59 @@ async function checkUpdate() {
   } catch { /* 인터넷이 없거나 깃허브가 응답하지 않으면 알림 없이 넘어간다 */ }
 }
 
+function applyOpened(data, original, name) {
+  applyProduct(data);
+  state.jevApplied = false;
+  state.original = { w: original.w, h: original.h, bytes: Raster.fromPremultiplied(original.data, original.w, original.h).straightBytes() };
+  state.fileName = name;
+  state.cloud.result = null;
+  state.aligned = null;
+  state.compare = false;
+  if (state.stage !== 'help') state.stage = 'dot';
+}
+
+/** 한 장이면 열고, 여러 장이면 지금 설정으로 모두 도트화해 고른 폴더에 저장한다. */
+function openFiles(files) {
+  const images = files.filter(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name));
+  if (images.length > 1) batch(images); else open(images[0]);
+}
+
+async function batch(files) {
+  const size = dimensions();
+  if (!size || state.busy) return;
+  const folder = await desktop?.pickFolder?.();
+  if (!folder) return;
+  const settings = { ...state.settings }, scale = state.exportScale, failed = [];
+  let saved = 0;
+  state.notice = null;
+  for (const [k, file] of files.entries()) {
+    const label = `여러 장 도트화 중 (${k + 1}/${files.length}) · ${file.name}`;
+    try {
+      state.busy = label; state.error = null; update();
+      const original = await decode(file);
+      submittedSettings = settings;
+      const data = await engine.request('open', { original, w: size[0], h: size[1], settings }, label);
+      applyOpened(data, original, file.name);
+      const picture = scaled(data.dotted, scale);
+      const blob = await new Promise(done => toCanvas(picture).toBlob(done, 'image/png'));
+      await desktop.writeToFolder(outputName(file.name, 'dot', data.dotted, scale), new Uint8Array(await blob.arrayBuffer()));
+      saved++;
+    } catch (error) {
+      console.error(error);
+      failed.push(file.name);
+    }
+  }
+  state.busy = null;
+  state.error = null;
+  state.notice = `여러 장 도트화: ${saved}장을 '${folder}' 폴더에 저장했습니다` + (failed.length ? ` · 실패 ${failed.length}장 (${failed.join(', ')})` : '');
+  update();
+}
+
 async function open(file) {
   if (!file) return;
   const size = dimensions();
   if (!size) return;
+  state.notice = null;
   state.busy = '이미지 읽는 중';
   state.error = null;
   update();
@@ -211,14 +271,7 @@ async function open(file) {
   }
   const settings = { ...state.settings };
   submittedSettings = settings;
-  engine.submit('open', { original, w: size[0], h: size[1], settings }, '원본에서 캐릭터 분리 중', data => {
-    applyProduct(data);
-    state.jevApplied = false;
-    state.original = { w: original.w, h: original.h, bytes: Raster.fromPremultiplied(original.data, original.w, original.h).straightBytes() };
-    state.fileName = file.name;
-    state.cloud.result = null;
-    if (state.stage !== 'help') state.stage = 'dot';
-  });
+  engine.submit('open', { original, w: size[0], h: size[1], settings }, '원본에서 캐릭터 분리 중', data => applyOpened(data, original, file.name));
 }
 
 function resize() {
@@ -226,7 +279,7 @@ function resize() {
   if (!state.product || !size) return;
   const settings = { ...state.settings };
   submittedSettings = settings;
-  engine.submit('resize', { w: size[0], h: size[1], settings }, '캐릭터 축소 중', applyProduct);
+  engine.submit('resize', { w: size[0], h: size[1], settings }, '캐릭터 축소 중', data => { applyProduct(data); state.aligned = null; if (state.compare) loadAligned(); });
 }
 
 function redot() {
@@ -305,18 +358,66 @@ async function runCloud() {
   update();
 }
 
+function outputName(fileName, stage, picture, scale) {
+  const base = fileName ? fileName.replace(/\.[^.]+$/, '') : '도트그림';
+  return `${base}-${STAGES[stage].name}-${picture.w}x${picture.h}${scale > 1 ? `-${scale}배` : ''}.png`;
+}
+
+/** 지금 탭의 결과를 저장 배율대로 클립보드에 복사한다. */
+async function copyResult() {
+  const picture = result();
+  if (!picture || state.busy) return;
+  try {
+    const blob = await new Promise(done => toCanvas(scaled(picture, state.exportScale)).toBlob(done, 'image/png'));
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    state.notice = `결과를 복사했습니다 (${picture.w * state.exportScale}×${picture.h * state.exportScale})`;
+  } catch (error) {
+    console.error(error);
+    state.error = '결과를 복사하지 못했습니다.';
+  }
+  update();
+}
+
+/** 비교용 원본: 캐릭터를 결과와 같은 자리·크기로 놓은 그림(reduceDirect와 같은 배치). */
+async function loadAligned() {
+  if (state.aligned || !state.product) return;
+  const { w, h } = state.product.dotted;
+  try {
+    const { subject } = await engine.request('subject', {}, '비교할 원본 준비 중');
+    const scale = Math.min((w - 4) / subject.w, (h - 4) / subject.h);
+    const sw = Math.max(1, Math.round(subject.w * scale)), sh = Math.max(1, Math.round(subject.h * scale));
+    const k = Math.max(1, Math.round(1200 / Math.max(w, h)));
+    const canvas = document.createElement('canvas');
+    canvas.width = w * k; canvas.height = h * k;
+    const context = canvas.getContext('2d');
+    context.imageSmoothingQuality = 'high';
+    context.drawImage(toCanvas(subject), Math.trunc((w - sw) / 2) * k, Math.trunc((h - sh) / 2) * k, sw * k, sh * k);
+    state.aligned = { w: canvas.width, h: canvas.height, bytes: context.getImageData(0, 0, canvas.width, canvas.height).data };
+  } catch (error) {
+    console.error(error);
+    state.compare = false;
+  }
+  update();
+}
+
+function toggleCompare() {
+  state.compare = !state.compare;
+  update();
+  if (state.compare) loadAligned();
+}
+
 function save() {
   const picture = result();
   if (!picture || state.busy) return;
   const scale = state.exportScale;
-  const base = state.fileName ? state.fileName.replace(/\.[^.]+$/, '') : '도트그림';
-  const suffix = scale > 1 ? `-${scale}배` : '';
-  const name = `${base}-${STAGES[state.stage].name}-${picture.w}x${picture.h}${suffix}.png`;
+  const name = outputName(state.fileName, state.stage, picture, scale);
   writePNG(scaled(picture, scale), name).catch(error => { state.error = 'PNG를 저장하지 못했습니다.'; console.error(error); update(); });
 }
 
 function setSetting(key, value) {
   state.settings = { ...state.settings, [key]: value };
+  store.set('settings', state.settings);
+  state.notice = null;
   state.jevApplied = false;
   update();
   redot();
@@ -362,8 +463,8 @@ const el = (tag, props = {}, ...children) => {
   return node;
 };
 
-function preview(title, picture, pixelated) {
-  const head = el('header', {}, el('h3', { textContent: title }),
+function preview(title, picture, pixelated, action = null) {
+  const head = el('header', {}, el('h3', { textContent: title }), action,
     picture && el('span', { className: 'size', textContent: `${picture.w} × ${picture.h} px` }));
   const frame = el('div', { className: 'frame' });
   if (picture) {
@@ -424,7 +525,7 @@ function controls(stage) {
   if (stage === 'repair') return cloudControls();
   const busy = Boolean(state.busy), loaded = Boolean(state.product);
   // 결과 크기(정사각형, 범위는 settings.js). 고르면 바로 다시 그린다.
-  const sizeSelect = el('select', { disabled: busy, onchange: event => { state.width = state.height = event.target.value; resize(); } },
+  const sizeSelect = el('select', { disabled: busy, onchange: event => { state.width = state.height = event.target.value; store.set('size', Number(event.target.value)); state.notice = null; resize(); } },
     ...sizeChoices().map(v => el('option', { value: String(v), textContent: `${v}×${v}`, selected: String(v) === state.width })));
   sizeSelect.setAttribute('aria-label', '결과 크기');
   const sizeRow = row(labelled('결과 크기', sizeSelect), upscaleControl());
@@ -562,6 +663,8 @@ function statusLine(stage) {
   } else if (state.error) {
     status.classList.add('error');
     status.textContent = state.error;
+  } else if (state.notice) {
+    status.textContent = state.notice;
   } else if (stage === 'dot' && state.product) {
     status.textContent = state.product.status;
   } else if (stage === 'repair' && state.cloud.result) {
@@ -585,9 +688,16 @@ function screen(stage) {
         : preview(input ? `보낼 그림 · ${input.name}` : '보낼 그림 · 지금 도트화 결과', input ? input.picture : result('dot'), true),
       preview('결과', r?.final ?? null, true)));
   } else if (state.product && state.original) {
+    // 원본 보기: 결과 자리에 원본 캐릭터를 같은 위치·크기로 보여 줘, 눌러 가며 달라진 곳을 본다.
+    const showing = state.compare && state.aligned;
+    const compare = el('button', { type: 'button', className: 'compare', textContent: showing ? '결과 보기' : '원본 보기', onclick: toggleCompare,
+      title: '결과 자리에 원본을 같은 위치·크기로 보여 줍니다. 눌러 가며 달라진 곳을 비교하세요.' });
+    compare.setAttribute('aria-pressed', String(Boolean(showing)));
+    const after = showing ? preview('원본 (결과와 같은 자리)', state.aligned, false, compare) : preview('결과', result('dot'), true, compare);
+    if (showing) after.querySelector('.size').textContent = `${result('dot').w} × ${result('dot').h} px 자리`;
     page.append(state.settings.method === 'faithful'
-        ? el('div', { className: 'previews' }, preview('원본', state.original, false), preview('결과', result('dot'), true))
-        : el('div', { className: 'previews' }, preview('축소 이미지', result('reduce'), true), preview('결과', result('dot'), true)));
+        ? el('div', { className: 'previews' }, preview('원본', state.original, false), after)
+        : el('div', { className: 'previews' }, preview('축소 이미지', result('reduce'), true), after));
   } else {
     page.append(el('button', { type: 'button', className: 'empty drop', onclick: () => $('file').click() },
       el('strong', { textContent: '캐릭터 이미지를 여기에 놓으십시오' }), el('span', { textContent: 'PNG, JPEG, WebP 등 이미지 파일 · 눌러서 고를 수도 있어요' })));
@@ -619,10 +729,14 @@ function helpScreen() {
   const list = items => el('ul', {}, ...items.map(t => el('li', { innerHTML: t })));
   return el('div', { className: 'screen help' },
     section('시작하기', list([
-      '<b>이미지 열기…</b>를 누르거나 이미지를 창에 끌어다 놓습니다. <kbd>Ctrl</kbd>+<kbd>O</kbd>',
+      '<b>이미지 열기…</b>를 누르거나 이미지를 창에 끌어다 놓습니다. <kbd>Ctrl</kbd>+<kbd>O</kbd> · 캡처한 그림은 <kbd>Ctrl</kbd>+<kbd>V</kbd>로 바로 붙여넣을 수 있습니다(맥은 <kbd>⌘</kbd>).',
+      '<b>여러 장 한꺼번에</b>: 이미지를 여러 장 고르거나 끌어다 놓으면, 저장할 폴더를 묻고 지금 설정·크기·저장 배율로 모두 도트화해 그 폴더에 저장합니다.',
       `<b>결과 크기</b>: ${SETTINGS.size.min}×${SETTINGS.size.min} ~ ${SETTINGS.size.max}×${SETTINGS.size.max}(${SETTINGS.size.step}px 단위)에서 고르면 바로 다시 그립니다. 배경은 자동으로 지우고 캐릭터를 캔버스에 맞춥니다.`,
       '<b>도트화</b> 탭: 설정을 바꾸면 바로 다시 계산합니다. 계산 중에도 설정을 바꿀 수 있고, 마지막 설정으로 결과가 나옵니다.',
-      '<b>PNG 저장…</b>: 지금 탭의 결과를 저장합니다. <kbd>Ctrl</kbd>+<kbd>S</kbd> · 저장 배율(1·2·4·8배)은 번짐 없이 키우고, 다음에도 기억합니다.',
+      '<b>PNG 저장…</b>: 지금 탭의 결과를 저장합니다. <kbd>Ctrl</kbd>+<kbd>S</kbd> · 저장 배율(1·2·4·8배)은 번짐 없이 키웁니다.',
+      '<b>복사</b>: 지금 탭의 결과를 저장 배율대로 클립보드에 복사합니다. <kbd>Ctrl</kbd>+<kbd>C</kbd>',
+      '<b>원본 보기</b>(결과 위 버튼): 결과 자리에 원본을 같은 위치·크기로 보여 줍니다. 눌러 가며 달라진 곳을 비교하세요.',
+      '결과 크기·도트화 방식·AI 업스케일·체크 항목·저장 배율은 <b>다음에 켤 때도 그대로</b>입니다.',
     ])),
     section('도트화 설정', list([
       '<b>AI 업스케일(ESRGAN)</b>: 도트화하기 전에 원본을 Real-ESRGAN으로 4배 키워 흐린 선과 잡티를 정리합니다. 자동은 원본이 결과 크기의 4배보다 작을 때만 켭니다. 6B는 더 깔끔하고, v3는 더 빠릅니다.',
@@ -690,7 +804,7 @@ function updateStatus() {
 
 function update() {
   $('file-name').textContent = state.fileName ?? '';
-  $('save').disabled = !result() || Boolean(state.busy);
+  $('save').disabled = $('copy').disabled = !result() || Boolean(state.busy);
   for (const tab of document.querySelectorAll('[data-stage]')) {
     const selected = tab.dataset.stage === state.stage;
     tab.setAttribute('aria-selected', String(selected));
@@ -715,8 +829,9 @@ function update() {
 $('version').textContent = VERSION;
 checkUpdate();
 $('open').onclick = () => $('file').click();
-$('file').onchange = event => { open(event.target.files[0]); event.target.value = ''; };
+$('file').onchange = event => { openFiles([...event.target.files]); event.target.value = ''; };
 $('save').onclick = save;
+$('copy').onclick = copyResult;
 $('scale').onchange = event => { state.exportScale = Number(event.target.value); store.set('exportScale', state.exportScale); };
 for (const tab of document.querySelectorAll('[data-stage]')) {
   tab.onclick = () => { state.stage = tab.dataset.stage; update(); };
@@ -743,12 +858,28 @@ document.addEventListener('drop', event => {
   event.preventDefault();
   dragDepth = 0;
   document.body.classList.remove('dragging');
-  const file = [...(event.dataTransfer?.files ?? [])].find(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name));
+  takeFiles([...(event.dataTransfer?.files ?? [])]);
+});
+// 붙여넣기: 클립보드의 그림(캡처 등)을 연다. 글자 입력 칸에 붙여넣을 때는 건드리지 않는다.
+document.addEventListener('paste', event => {
+  const files = [...(event.clipboardData?.files ?? [])];
+  if (!files.some(f => f.type.startsWith('image/'))) return;
+  event.preventDefault();
+  takeFiles(files.map((f, k) => (f.name && f.name !== 'image.png' ? f : new File([f], `붙여넣은 그림${files.length > 1 ? k + 1 : ''}.png`, { type: f.type }))));
+});
+// 복사: 글자를 고르지 않았을 때 Ctrl/Cmd+C는 결과 그림을 복사한다.
+document.addEventListener('copy', event => {
+  if (String(getSelection()) || /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName) || !result()) return;
+  event.preventDefault();
+  copyResult();
+});
+function takeFiles(files) {
+  const file = files.find(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name));
   if (!file) return;
   // AI 보정 탭에서는 그 탭의 그림으로 넣고, 다른 탭에서는 도트화할 원본으로 연다.
   if (state.stage === 'repair') {
     loadPictureFile(file).then(picture => setCloudInput(picture, file.name))
       .catch(error => { state.error = error.message; update(); });
-  } else open(file);
-});
+  } else openFiles(files);
+}
 update();

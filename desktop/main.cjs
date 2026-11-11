@@ -1,6 +1,6 @@
 // 도트메이커 설치형 프로그램 본체. 화면은 dist/도트메이커.html을 그대로 띄우고,
 // 브라우저에서 막히는 JEV(LLM Gateway) 요청만 여기서 대신 보낸다. API 키는 운영체제 암호화 저장소로 보관한다.
-const { app, BrowserWindow, ipcMain, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -33,6 +33,19 @@ ipcMain.handle('jev:request', async (_event, body) => {
     signal: AbortSignal.timeout(90_000),
   });
   return { status: response.status, text: await response.text() };
+});
+
+// 여러 장 저장: 사용자가 고른 폴더 안에만, 파일 이름만 받아서 쓴다.
+let batchFolder = null;
+ipcMain.handle('batch:pickFolder', async event => {
+  const picked = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), { title: '도트 그림을 저장할 폴더', properties: ['openDirectory', 'createDirectory'] });
+  batchFolder = picked.canceled ? null : picked.filePaths[0];
+  return batchFolder && path.basename(batchFolder);
+});
+ipcMain.handle('batch:write', (_event, name, png) => {
+  if (!batchFolder) throw new Error('저장할 폴더를 고르지 않았습니다.');
+  fs.writeFileSync(path.join(batchFolder, path.basename(String(name))), Buffer.from(png));
+  return true;
 });
 
 function createWindow() {
