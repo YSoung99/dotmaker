@@ -3,6 +3,7 @@ const VERSION = '__VERSION__';  // tools/build.mjs가 package.json의 버전을 
 const STAGES = {
   dot: { name: '도트화', instruction: '머리와 몸통을 구분해 검은 윤곽과 몸통 경계색을 적용합니다.' },
   repair: { name: 'AI 보정', instruction: '클라우드 AI(PixelLab·Gemini·OpenAI)에 캐릭터를 보내 도트 그림으로 다시 그립니다. 쓰려면 그 서비스의 내 API 키가 필요합니다.' },
+  lab: { name: '실험', instruction: '베타: 캐릭터를 오려 내지 않고 그림 전체를 배경째 도트로 바꿉니다. 도트 크기와 색 수만 고르면 됩니다. 다른 탭의 결과에는 영향을 주지 않습니다.' },
   help: { name: '설명서' },
 };
 
@@ -27,6 +28,7 @@ const state = {
   compare: false,   // 결과 자리에 원본을 같은 위치·크기로 보여 준다
   aligned: null,    // 비교용 원본 그림(결과 칸에 맞춘 것). 그림이나 크기가 바뀌면 다시 만든다
   notice: null,     // 여러 장 저장·복사 결과 안내
+  lab: labInitial(),  // 실험 탭(베타) — lab.js
   retryWhole: null, // 캐릭터 분리에 실패한 파일(‘분리 없이 그대로 변환’ 버튼용)
   exportScale: [1, 2, 4, 8].includes(store.get('exportScale', 1)) ? store.get('exportScale', 1) : 1,
   original: null,   // 원본 미리보기 { w, h, bytes }
@@ -211,6 +213,7 @@ function applyOpened(data, original, name) {
   state.original = { w: original.w, h: original.h, bytes: Raster.fromPremultiplied(original.data, original.w, original.h).straightBytes() };
   state.fileName = name;
   state.cloud.result = null;
+  state.lab.result = null;
   state.aligned = null;
   state.compare = false;
   if (state.stage !== 'help') state.stage = 'dot';
@@ -297,6 +300,7 @@ function redot() {
 }
 
 function result(stage = state.stage) {
+  if (stage === 'lab') return state.lab.result;
   if (stage === 'repair' && !state.product) return state.cloud.result?.final ?? null;
   if (!state.product) return null;
   if (stage === 'reduce') return state.product.reduced;
@@ -547,6 +551,7 @@ function finishRow(off) {
 
 function controls(stage) {
   if (stage === 'repair') return cloudControls();
+  if (stage === 'lab') return labControls();
   const busy = Boolean(state.busy), loaded = Boolean(state.product);
   // 결과 크기(정사각형, 범위는 settings.js). 고르면 바로 다시 그린다.
   const sizeSelect = el('select', { disabled: busy, onchange: event => { state.width = state.height = event.target.value; store.set('size', Number(event.target.value)); state.notice = null; resize(); } },
@@ -703,6 +708,8 @@ function statusLine(stage) {
     status.textContent = state.product.status;
   } else if (stage === 'repair' && state.cloud.result) {
     status.textContent = state.cloud.result.status;
+  } else if (stage === 'lab' && state.lab.result) {
+    status.textContent = state.lab.status;
   }
   return status;
 }
@@ -715,7 +722,9 @@ function screen(stage) {
     ? '원본의 색을 살리고 색 수만 줄여 도트로 바꿉니다. 선은 원본에서 줄기를 찾아 1픽셀로 정리하고, 색은 조금 더 선명하게, 바깥 테두리와 색 면은 깔끔하게 정리합니다.'
     : STAGES[stage].instruction;
   const page = el('div', { className: 'screen' }, el('p', { className: 'muted', textContent: instruction }), controls(stage));
-  if (stage === 'repair' && (state.product || state.cloud.input)) {
+  if (stage === 'lab' && labSource()) {
+    page.append(el('div', { className: 'previews' }, preview('원본', labSource(), false), preview('결과', state.lab.result, true)));
+  } else if (stage === 'repair' && (state.product || state.cloud.input)) {
     const r = state.cloud.result, input = state.cloud.input;
     page.append(el('div', { className: 'previews' },
       r ? preview(r.corrected ? '다듬기 전' : r.pixel ? 'AI 도트 그림' : 'AI가 그린 그림', r.ai, r.pixel)
@@ -771,6 +780,12 @@ function helpScreen() {
       '<b>복사</b>: 지금 탭의 결과를 저장 배율대로 클립보드에 복사합니다. <kbd>Ctrl</kbd>+<kbd>C</kbd>',
       '<b>원본 보기</b>(결과 위 버튼): 결과 자리에 원본을 같은 위치·크기로 보여 줍니다. 눌러 가며 달라진 곳을 비교하세요.',
       '결과 크기·도트화 방식·AI 업스케일·체크 항목·저장 배율은 <b>다음에 켤 때도 그대로</b>입니다.',
+    ])),
+    section('실험 탭 (베타)', list([
+      '캐릭터를 오려 내지 않고 <b>그림 전체를 배경째</b> 도트로 바꿉니다. 도트화 탭에서 연 원본을 쓰거나, 이 탭에 다른 그림을 넣을 수 있습니다(끌어다 놓기·붙여넣기 가능).',
+      '<b>도트 크기</b>: 원본 몇 픽셀을 한 칸으로 묶을지입니다. 결과는 원본 비율 그대로이고, 한 변이 512칸을 넘지 않게 맞춥니다.',
+      '<b>자동 추출</b>: 그림에서 가장 가까운 8~256색을 골라 원본 색감을 유지합니다. <b>커스텀 팔레트</b>: 색 칸을 눌러 정한 색만 씁니다(기본은 옛 PC 느낌의 16색).',
+      '베타 기능이라 동작과 화면이 바뀔 수 있습니다.',
     ])),
     section('도트화 설정', list([
       '<b>캐릭터를 분리하지 못했을 때</b>: 오류 문구 옆의 <b>분리 없이 그대로 변환</b>을 누르면 배경을 지우지 않고 그림 전체를 그대로 도트로 바꿉니다.',
@@ -841,6 +856,8 @@ function updateStatus() {
 }
 
 function update() {
+  // 실험 탭은 결과가 비어 있으면 먼저 만든다(저장·복사 버튼 상태가 결과를 보고 정해지므로 맨 앞에서).
+  if (state.stage === 'lab' && !state.lab.result) labRun();
   $('file-name').textContent = state.fileName ?? '';
   $('save').disabled = $('copy').disabled = !result() || Boolean(state.busy);
   for (const tab of document.querySelectorAll('[data-stage]')) {
@@ -915,8 +932,8 @@ function takeFiles(files) {
   const file = files.find(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name));
   if (!file) return;
   // AI 보정 탭에서는 그 탭의 그림으로 넣고, 다른 탭에서는 도트화할 원본으로 연다.
-  if (state.stage === 'repair') {
-    loadPictureFile(file).then(picture => setCloudInput(picture, file.name))
+  if (state.stage === 'repair' || state.stage === 'lab') {
+    loadPictureFile(file).then(picture => (state.stage === 'lab' ? setLabInput(picture, file.name) : setCloudInput(picture, file.name)))
       .catch(error => { state.error = error.message; update(); });
   } else openFiles(files);
 }

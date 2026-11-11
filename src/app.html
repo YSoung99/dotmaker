@@ -100,6 +100,9 @@ main { flex: 1; display: flex; min-height: 0; background: var(--panel); }
 .preview header { display: flex; align-items: center; gap: 8px; min-height: 30px; }
 .preview h3 { margin: 0; font-size: 14px; }
 input.palette { width: 260px; }
+.tabs small { font-size: 11px; color: var(--accent); margin-left: 2px; }
+.swatches { display: flex; flex-wrap: wrap; gap: 4px; max-width: 540px; }
+.swatches input[type=color] { width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: none; cursor: pointer; }
 .preview .compare { padding: 2px 10px; font-size: 12px; }
 .preview .compare[aria-pressed=true] { border-color: var(--accent); }
 .preview .size { margin-left: auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -181,6 +184,7 @@ input.wide { width: min(520px, 100%); text-align: left; }
 <nav id="tabs" class="tabs" role="tablist" aria-label="단계">
   <button type="button" role="tab" data-stage="dot">도트화</button>
   <button type="button" role="tab" data-stage="repair">AI 보정</button>
+  <button type="button" role="tab" data-stage="lab">실험 <small>베타</small></button>
   <button type="button" role="tab" data-stage="help">설명서</button>
 </nav>
 <main id="panel" role="tabpanel"></main>
