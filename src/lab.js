@@ -1,5 +1,5 @@
 // 실험 탭(베타): 캐릭터를 오려 내지 않고 그림 전체를 배경째 도트로 바꾼다.
-// 도트 크기(원본 몇 픽셀을 한 칸으로)와 색 뽑는 방식(자동 N색 / 커스텀 팔레트)만 고른다.
+// 도트 크기(원본 몇 픽셀을 한 칸으로) 또는 결과 크기(긴 변 칸 수)와 색 뽑는 방식(자동 N색 / 커스텀 팔레트)만 고른다.
 // 계산이 가벼워 작업자 없이 화면에서 바로 한다. 다른 탭의 결과에는 영향을 주지 않는다.
 
 // 커스텀 팔레트 기본 16색: 옛 PC 느낌의 디지털 RGB 16색(앞 8개는 밝은 8색이라 8색만 써도 흰색·원색이 있다).
@@ -20,10 +20,11 @@ function labDefaultPalette() {
 function labInitial() {
   const saved = store.get('lab.palette', null);
   const mode = store.get('lab.mode', 'auto') === 'custom' ? 'custom' : 'auto';
-  const count = store.get('lab.count', 16);
+  const count = store.get('lab.count', 16), size = store.get('lab.size', 0);
   return {
     input: null,     // 이 탭에 따로 넣은 그림 { name, picture } — 없으면 도트화 탭에서 연 원본을 쓴다
     block: Math.min(32, Math.max(1, Number(store.get('lab.block', 4)) || 4)),
+    size: sizeChoices().includes(size) ? size : 0,   // 결과 크기(긴 변 칸 수). 0이면 도트 크기대로
     mode,
     count: LAB_COUNTS[mode].includes(count) ? count : 16,
     palette: Array.isArray(saved) && saved.length === 64 && saved.every(c => /^[0-9a-f]{6}$/.test(c)) ? saved : labDefaultPalette(),
@@ -38,7 +39,7 @@ function setLab(key, value) {
   const lab = state.lab;
   lab[key] = value;
   if (key === 'mode' && !LAB_COUNTS[value].includes(lab.count)) lab.count = 64;
-  for (const k of ['block', 'mode', 'count', 'palette']) store.set('lab.' + k, lab[k]);
+  for (const k of ['block', 'size', 'mode', 'count', 'palette']) store.set('lab.' + k, lab[k]);
   lab.result = null;
   state.notice = null;
   update();
@@ -50,9 +51,9 @@ function setLabInput(picture, name) {
   update();
 }
 
-/** 원본을 block×block 픽셀씩 평균 내 한 칸으로 줄인다. 절반 넘게 투명한 칸은 투명. */
-function labShrink(source, block) {
-  const scale = Math.max(block, Math.max(source.w, source.h) / LAB_MAX_SIDE);
+/** 원본을 wanted×wanted 픽셀씩 평균 내 한 칸으로 줄인다. 절반 넘게 투명한 칸은 투명. */
+function labShrink(source, wanted) {
+  const scale = Math.max(wanted, Math.max(source.w, source.h) / LAB_MAX_SIDE);
   const w = Math.max(1, Math.round(source.w / scale)), h = Math.max(1, Math.round(source.h / scale));
   const out = new Uint8ClampedArray(w * h * 4), src = source.bytes;
   for (let y = 0; y < h; y++) {
@@ -135,7 +136,10 @@ function labNearest(r, g, b, palette) {
 function labRun() {
   const lab = state.lab, source = labSource();
   if (!source) return;
-  const small = labShrink(source, lab.block);
+  // 결과 크기를 골랐으면 긴 변이 그 칸 수가 되게 묶는다(원본이 더 작으면 키우지 않고 원본 크기 그대로).
+  const longSide = Math.max(source.w, source.h);
+  const wanted = lab.size ? Math.max(1, longSide / lab.size) : lab.block;
+  const small = labShrink(source, wanted);
   const palette = lab.mode === 'custom'
     ? lab.palette.slice(0, lab.count).map(hex => [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)])
     : labAutoPalette(small, lab.count);
@@ -149,8 +153,10 @@ function labRun() {
     used.add(k);
   }
   lab.result = { w: small.w, h: small.h, bytes: px };
-  const limited = small.scale > lab.block ? ` (큰 그림이라 한 변 ${LAB_MAX_SIDE}칸으로 맞춤)` : '';
-  lab.status = `실험(베타) · ${small.w}×${small.h} px · 도트 크기 ${lab.block}px${limited} · ${lab.mode === 'custom' ? '커스텀 팔레트' : '자동 추출'} ${lab.count}색 중 ${used.size}색 사용`;
+  const how = lab.size
+    ? `긴 변 ${lab.size}칸에 맞춤${longSide < lab.size ? ' (원본이 더 작아 원본 크기 그대로)' : ''}`
+    : `도트 크기 ${lab.block}px${small.scale > wanted ? ` (큰 그림이라 한 변 ${LAB_MAX_SIDE}칸으로 맞춤)` : ''}`;
+  lab.status = `실험(베타) · ${small.w}×${small.h} px · ${how} · ${lab.mode === 'custom' ? '커스텀 팔레트' : '자동 추출'} ${lab.count}색 중 ${used.size}색 사용`;
 }
 
 function labControls() {
@@ -158,6 +164,10 @@ function labControls() {
   const count = el('select', { disabled: off, onchange: event => setLab('count', Number(event.target.value)) },
     ...LAB_COUNTS[lab.mode].map(v => el('option', { value: String(v), textContent: `${v}색`, selected: v === lab.count })));
   count.setAttribute('aria-label', '팔레트 색 수');
+  const size = el('select', { disabled: off, onchange: event => setLab('size', Number(event.target.value)) },
+    el('option', { value: '0', textContent: '도트 크기대로', selected: !lab.size }),
+    ...sizeChoices().map(v => el('option', { value: String(v), textContent: `긴 변 ${v}칸`, selected: v === lab.size })));
+  size.setAttribute('aria-label', '결과 크기');
   const swatches = lab.mode === 'custom' && el('div', { className: 'swatches' },
     ...lab.palette.slice(0, lab.count).map((hex, k) => {
       const input = el('input', { type: 'color', value: '#' + hex, title: `${k + 1}번 색 #${hex} — 눌러서 바꾸기`,
@@ -171,11 +181,12 @@ function labControls() {
         : state.original ? `도트화 탭에서 연 원본 (${state.original.w}×${state.original.h})` : '없음 — 이미지를 넣거나 열어 주세요' }),
       el('button', { type: 'button', textContent: '다른 이미지 넣기…', onclick: () => pickFile((picture, name) => setLabInput(picture, name)) }),
       lab.input && el('button', { type: 'button', textContent: '넣은 그림 빼기', onclick: () => setLabInput(null) })),
-    row(stepper(`도트 크기 ${lab.block}px`, lab.block, 1, 32, 1, v => setLab('block', v), off),
+    row(labelled('결과 크기', size),
+      stepper(`도트 크기 ${lab.block}px`, lab.block, 1, 32, 1, v => setLab('block', v), off || Boolean(lab.size)),
       labelled('색 뽑는 방식', segmented([['auto', '자동 추출'], ['custom', '커스텀 팔레트']], lab.mode, v => setLab('mode', v), off, '색 뽑는 방식')),
       labelled('팔레트 색 수', count)),
     swatches && row(swatches, el('button', { type: 'button', textContent: '기본 색으로', onclick: () => setLab('palette', labDefaultPalette()) })),
     el('p', { className: 'note', textContent: lab.mode === 'custom'
       ? '커스텀 팔레트: 정해 둔 색만 씁니다. 색 칸을 눌러 바꾸세요. 여러 그림의 색감을 맞추거나 옛 게임 느낌을 낼 때 좋고, 원본과 색이 많이 달라질 수 있습니다.'
-      : '자동 추출: 그림에 쓰인 색과 가장 가까운 색을 골라 원본 색감을 유지합니다. 도트 크기는 원본 몇 픽셀을 한 칸으로 묶을지입니다(클수록 칸이 굵어짐).' }));
+      : '자동 추출: 그림에 쓰인 색과 가장 가까운 색을 골라 원본 색감을 유지합니다. 도트 크기는 원본 몇 픽셀을 한 칸으로 묶을지입니다(클수록 칸이 굵어짐). 결과 크기를 고르면 도트 크기 대신 긴 변을 그 칸 수에 맞춥니다.' }));
 }

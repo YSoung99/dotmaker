@@ -531,6 +531,14 @@ function sizeChoices() {
   return choices;
 }
 
+/** 결과 크기(정사각형, 범위는 settings.js). 고르면 바로 다시 그린다. 도트화·AI 보정 탭이 같은 크기를 쓴다. */
+function sizeControl(off = false) {
+  const select = el('select', { disabled: off || Boolean(state.busy), onchange: event => { state.width = state.height = event.target.value; store.set('size', Number(event.target.value)); state.notice = null; resize(); } },
+    ...sizeChoices().map(v => el('option', { value: String(v), textContent: `${v}×${v}`, selected: String(v) === state.width })));
+  select.setAttribute('aria-label', '결과 크기');
+  return labelled('결과 크기', select);
+}
+
 /** 모든 도트화 방식 공통 마무리 설정. */
 function finishRow(off) {
   const s = state.settings;
@@ -552,12 +560,8 @@ function finishRow(off) {
 function controls(stage) {
   if (stage === 'repair') return cloudControls();
   if (stage === 'lab') return labControls();
-  const busy = Boolean(state.busy), loaded = Boolean(state.product);
-  // 결과 크기(정사각형, 범위는 settings.js). 고르면 바로 다시 그린다.
-  const sizeSelect = el('select', { disabled: busy, onchange: event => { state.width = state.height = event.target.value; store.set('size', Number(event.target.value)); state.notice = null; resize(); } },
-    ...sizeChoices().map(v => el('option', { value: String(v), textContent: `${v}×${v}`, selected: String(v) === state.width })));
-  sizeSelect.setAttribute('aria-label', '결과 크기');
-  const sizeRow = row(labelled('결과 크기', sizeSelect), upscaleControl());
+  const loaded = Boolean(state.product);
+  const sizeRow = row(sizeControl(), upscaleControl());
   if (stage === 'dot') {
     // 설정은 계산 중에도 바꿀 수 있다(마지막 설정으로 다시 계산).
     const s = state.settings, off = !loaded, soft = s.method === 'soft';
@@ -679,7 +683,8 @@ function cloudControls() {
       el('span', { className: 'muted', textContent: info.detail })),
     keyRow(c.provider),
     options,
-    row(upscaleControl(), el('span', { className: 'note', textContent: '다시 그린 그림을 도트화하기 전에 적용됩니다(받은 그림이 이미 도트 그림이면 쓰지 않음)' })),
+    // 다듬기에 따로 넣은 그림은 크기 그대로 보내므로 결과 크기를 쓰지 않는다.
+    row(sizeControl(correcting() && Boolean(c.input)), upscaleControl(), el('span', { className: 'note', textContent: '다시 그린 그림을 도트화하기 전에 적용됩니다(받은 그림이 이미 도트 그림이면 쓰지 않음)' })),
     inputRow(),
     row(el('button', { type: 'button', className: 'primary', textContent: 'AI 보정 실행', disabled: busy || !(state.product || c.input) || !key, onclick: runCloud }),
       el('span', { className: 'note', textContent: correcting()
@@ -784,6 +789,7 @@ function helpScreen() {
     section('실험 탭 (베타)', list([
       '캐릭터를 오려 내지 않고 <b>그림 전체를 배경째</b> 도트로 바꿉니다. 도트화 탭에서 연 원본을 쓰거나, 이 탭에 다른 그림을 넣을 수 있습니다(끌어다 놓기·붙여넣기 가능).',
       '<b>도트 크기</b>: 원본 몇 픽셀을 한 칸으로 묶을지입니다. 결과는 원본 비율 그대로이고, 한 변이 512칸을 넘지 않게 맞춥니다.',
+      `<b>결과 크기</b>: 긴 변 ${SETTINGS.size.min}~${SETTINGS.size.max}칸 중에서 고르면 원본 비율 그대로 그 크기에 맞춥니다(이때 도트 크기는 쓰지 않음). <b>도트 크기대로</b>로 두면 도트 크기를 씁니다.`,
       '<b>자동 추출</b>: 그림에서 가장 가까운 8~256색을 골라 원본 색감을 유지합니다. <b>커스텀 팔레트</b>: 색 칸을 눌러 정한 색만 씁니다(기본은 옛 PC 느낌의 16색).',
       '베타 기능이라 동작과 화면이 바뀔 수 있습니다.',
     ])),
@@ -825,7 +831,7 @@ function helpScreen() {
       actions,
       state.aiMessage && el('p', { className: 'note', textContent: state.aiMessage })),
     section('AI 보정 (클라우드)', list([
-      '<b>AI 보정</b> 탭에서 서비스를 고르고 <b>내 API 키</b>를 넣은 뒤 <b>AI 보정 실행</b>을 누릅니다. 지금 캔버스 크기로 결과가 나옵니다. 도트화 탭 이미지 대신 <b>다른 이미지 넣기…</b>(또는 이 탭에 끌어다 놓기)로 원하는 그림을 보낼 수도 있습니다.',
+      '<b>AI 보정</b> 탭에서 서비스를 고르고 <b>내 API 키</b>를 넣은 뒤 <b>AI 보정 실행</b>을 누릅니다. 이 탭의 <b>결과 크기</b>(도트화 탭과 같은 값)로 결과가 나옵니다. 도트화 탭 이미지 대신 <b>다른 이미지 넣기…</b>(또는 이 탭에 끌어다 놓기)로 원하는 그림을 보낼 수도 있습니다.',
       '<b>PixelLab · 다시 그리기</b>: 도트 전용 AI라 결과가 바로 도트 그림입니다(배경만 지움). \'원본에 충실하게\'와 \'원본 유지\'(0~600, 높을수록 원본에 가깝게)로 조절합니다. 약 $0.01/장.',
       '<b>PixelLab · 다듬기</b>: 지금 도트화 결과를 크기 그대로 보내 잔점·계단 가장자리·색을 정리받습니다(투명 유지). 강도 0~1, 0.1부터 올려 보세요. 요금은 결과에 표시됩니다.',
       '<b>Gemini</b>(나노 바나나 2.1) · <b>OpenAI</b>(GPT Image 2.5): 도트 느낌의 큰 그림을 받아 지금 도트화 설정으로 한 번 더 도트화합니다. 약 $0.034/장, $0.01~0.05/장.',
