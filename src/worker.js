@@ -85,6 +85,18 @@ async function handle(job) {
       // 클라우드 AI에 보낼 캐릭터 그림
       const subject = picture(current.subject);
       self.postMessage({ id: job.id, type: 'done', subject }, [subject.bytes.buffer]);
+    } else if (job.type === 'cutout') {
+      // 실험 탭: 받은 그림에서 배경만 지운 캐릭터를 돌려준다(지금 열어 둔 그림은 건드리지 않는다).
+      const { image } = job;
+      let subject;
+      try {
+        subject = Subject.extract(image, null, true);
+      } catch (error) {
+        if (error.code !== 'needsMask') throw error;
+        subject = Subject.extract(image, await removeBackground(image, progress), true);
+      }
+      const cut = picture(subject);
+      self.postMessage({ id: job.id, type: 'done', subject: cut }, [cut.bytes.buffer]);
     } else if (job.type === 'cloud') {
       // 클라우드 AI 그림 마무리. 도트 그림(PixelLab)은 배경만 지우고, 아니면 지금 설정으로 도트화한다.
       const { image, w, h, settings, pixel } = job;

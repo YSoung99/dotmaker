@@ -1,6 +1,6 @@
-// 실험 탭(베타): 캐릭터를 오려 내지 않고 그림 전체를 배경째 도트로 바꾼다.
+// 실험 탭(베타): 그림을 도트 크기·색 수만 골라 도트로 바꾼다. 배경 지우기를 끄면 그림 전체를 배경째 바꾼다.
 // 도트 크기(원본 몇 픽셀을 한 칸으로) 또는 결과 크기(긴 변 칸 수)와 색 뽑는 방식(자동 N색 / 커스텀 팔레트)만 고른다.
-// 계산이 가벼워 작업자 없이 화면에서 바로 한다. 다른 탭의 결과에는 영향을 주지 않는다.
+// 계산이 가벼워 화면에서 바로 한다(배경 지우기만 작업자에게 맡긴다). 다른 탭의 결과에는 영향을 주지 않는다.
 
 // 커스텀 팔레트 기본 16색: 옛 PC 느낌의 디지털 RGB 16색(앞 8개는 밝은 8색이라 8색만 써도 흰색·원색이 있다).
 // 17번째부터는 4단계 RGB 조합으로 채운다.
@@ -25,6 +25,9 @@ function labInitial() {
     input: null,     // 이 탭에 따로 넣은 그림 { name, picture } — 없으면 도트화 탭에서 연 원본을 쓴다
     block: Math.min(32, Math.max(1, Number(store.get('lab.block', 4)) || 4)),
     size: sizeChoices().includes(size) ? size : 0,   // 결과 크기(긴 변 칸 수). 0이면 도트 크기대로
+    cutout: store.get('lab.cutout', true) !== false,  // 배경 지우기(기본 켬)
+    cut: null,       // 배경을 지운 그림 { from: 바꿀 그림, picture } — 못 지웠으면 picture가 null
+    cutting: null,   // 지금 배경을 지우고 있는 그림
     mode,
     count: LAB_COUNTS[mode].includes(count) ? count : 16,
     palette: Array.isArray(saved) && saved.length === 64 && saved.every(c => /^[0-9a-f]{6}$/.test(c)) ? saved : labDefaultPalette(),
@@ -39,7 +42,7 @@ function setLab(key, value) {
   const lab = state.lab;
   lab[key] = value;
   if (key === 'mode' && !LAB_COUNTS[value].includes(lab.count)) lab.count = 64;
-  for (const k of ['block', 'size', 'mode', 'count', 'palette']) store.set('lab.' + k, lab[k]);
+  for (const k of ['block', 'size', 'cutout', 'mode', 'count', 'palette']) store.set('lab.' + k, lab[k]);
   lab.result = null;
   state.notice = null;
   update();
@@ -48,6 +51,31 @@ function setLab(key, value) {
 function setLabInput(picture, name) {
   state.lab.input = picture ? { picture, name } : null;
   state.lab.result = null;
+  update();
+}
+
+/** 배경 지우기: 작업자에게서 캐릭터만 남긴 그림을 받아 둔다(같은 그림은 한 번만). 못 지우면 그림 전체를 쓴다. */
+async function labCutout(raw) {
+  const lab = state.lab;
+  if (lab.cutting === raw) return;
+  lab.cutting = raw;
+  await null;   // 화면을 그리는 도중에 불리므로, 그리기가 끝난 뒤에 요청한다
+  const data = new Uint8Array(raw.bytes.length);
+  for (let i = 0; i < data.length; i += 4) {
+    const a = raw.bytes[i + 3];
+    data[i] = Math.floor((raw.bytes[i] * a + 127) / 255);
+    data[i + 1] = Math.floor((raw.bytes[i + 1] * a + 127) / 255);
+    data[i + 2] = Math.floor((raw.bytes[i + 2] * a + 127) / 255);
+    data[i + 3] = a;
+  }
+  try {
+    const { subject } = await engine.request('cutout', { image: { w: raw.w, h: raw.h, data } }, '배경 지우는 중');
+    lab.cut = { from: raw, picture: subject };
+  } catch {
+    lab.cut = { from: raw, picture: null };
+    state.error = null;
+  }
+  if (lab.cutting === raw) lab.cutting = null;
   update();
 }
 
@@ -134,8 +162,12 @@ function labNearest(r, g, b, palette) {
 
 /** 지금 설정으로 결과를 다시 만든다(그림이 없으면 아무것도 안 함). */
 function labRun() {
-  const lab = state.lab, source = labSource();
-  if (!source) return;
+  const lab = state.lab, raw = labSource();
+  if (!raw) return;
+  // 배경 지우기: 지운 그림이 아직 없으면 받아 온 뒤에 다시 불린다.
+  if (lab.cutout && lab.cut?.from !== raw) { labCutout(raw); return; }
+  const source = lab.cutout && lab.cut.picture ? lab.cut.picture : raw;
+  const backdrop = !lab.cutout ? '' : lab.cut.picture ? ' · 배경 지움' : ' · 배경을 지우지 못해 그림 전체를 변환';
   // 결과 크기를 골랐으면 긴 변이 그 칸 수가 되게 묶는다(원본이 더 작으면 키우지 않고 원본 크기 그대로).
   const longSide = Math.max(source.w, source.h);
   const wanted = lab.size ? Math.max(1, longSide / lab.size) : lab.block;
@@ -156,7 +188,7 @@ function labRun() {
   const how = lab.size
     ? `긴 변 ${lab.size}칸에 맞춤${longSide < lab.size ? ' (원본이 더 작아 원본 크기 그대로)' : ''}`
     : `도트 크기 ${lab.block}px${small.scale > wanted ? ` (큰 그림이라 한 변 ${LAB_MAX_SIDE}칸으로 맞춤)` : ''}`;
-  lab.status = `실험(베타) · ${small.w}×${small.h} px · ${how} · ${lab.mode === 'custom' ? '커스텀 팔레트' : '자동 추출'} ${lab.count}색 중 ${used.size}색 사용`;
+  lab.status = `실험(베타) · ${small.w}×${small.h} px${backdrop} · ${how} · ${lab.mode === 'custom' ? '커스텀 팔레트' : '자동 추출'} ${lab.count}색 중 ${used.size}색 사용`;
 }
 
 function labControls() {
@@ -180,7 +212,9 @@ function labControls() {
       el('span', { className: 'muted', textContent: lab.input ? `넣은 그림 '${lab.input.name}' (${lab.input.picture.w}×${lab.input.picture.h})`
         : state.original ? `도트화 탭에서 연 원본 (${state.original.w}×${state.original.h})` : '없음 — 이미지를 넣거나 열어 주세요' }),
       el('button', { type: 'button', textContent: '다른 이미지 넣기…', onclick: () => pickFile((picture, name) => setLabInput(picture, name)) }),
-      lab.input && el('button', { type: 'button', textContent: '넣은 그림 빼기', onclick: () => setLabInput(null) })),
+      lab.input && el('button', { type: 'button', textContent: '넣은 그림 빼기', onclick: () => setLabInput(null) }),
+      toggle('배경 지우기', lab.cutout, v => setLab('cutout', v), off,
+        '캐릭터만 남기고 배경을 지운 뒤 도트로 바꿉니다. 끄면 그림 전체를 배경째 바꿉니다. 배경이 복잡한 그림은 처음 한 번 배경 분리 AI 파일을 받습니다.')),
     row(labelled('결과 크기', size),
       stepper(`도트 크기 ${lab.block}px`, lab.block, 1, 32, 1, v => setLab('block', v), off || Boolean(lab.size)),
       labelled('색 뽑는 방식', segmented([['auto', '자동 추출'], ['custom', '커스텀 팔레트']], lab.mode, v => setLab('mode', v), off, '색 뽑는 방식')),
