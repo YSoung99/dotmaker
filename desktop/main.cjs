@@ -53,6 +53,8 @@ function createWindow() {
     width: 1100, height: 800, minWidth: 760, minHeight: 560,
     title: '도트메이커',
     backgroundColor: '#1c1b1a',
+    // 리눅스는 창 아이콘을 따로 알려 줘야 작업 표시줄에 프로그램 아이콘이 보인다(맥·윈도우는 설치 파일의 아이콘을 쓴다).
+    ...(process.platform === 'linux' ? { icon: path.join(__dirname, 'icons', 'icon.png') } : {}),
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true },
   });
   window.removeMenu();
