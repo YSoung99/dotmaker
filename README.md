@@ -88,6 +88,8 @@ npm run dist       # 설치 파일 만들기: release/ 에 윈도우 .exe, 맥 .
 
 AI 업스케일 모델(ONNX)은 [models-esrgan 릴리스](https://github.com/YSoung99/dotmaker/releases/tag/models-esrgan)에 있고, [dotmaker-mac의 scripts/export-esrgan.py](https://github.com/YSoung99/dotmaker-mac/blob/main/scripts/export-esrgan.py)로 공식 가중치에서 다시 만들 수 있습니다.
 
+선 추출 AI 구조(`src/lines-graph.onnx`)와 가중치 목록(`src/lines-manifest.json`)은 [`tools/export-lines.py`](tools/export-lines.py)로 다시 만듭니다. torch 2.15.0 · transformers 4.57.6 · onnx 1.23.2가 있는 파이썬에서 `python3 tools/export-lines.py`를 실행하면 허깅페이스 원본 모델을 받아 두 파일을 덮어씁니다(이 판들이면 지금 파일과 바이트까지 같음, transformers 5.x는 안 됨).
+
 ## 📝 업데이트 기록
 
 - **3.9.3**: 실험 탭에 새 도트 방식 **투표**를 넣었습니다(줄이는 방식에서 고름). 칸마다 가장 넓은 색 영역을 고르고 그 영역의 원본 색으로 칠해, 작은 크기에서도 선이 또렷합니다. 가는 선을 지키는 **작은 디테일 지키기**, 끊긴 바깥선을 잇는 **외곽선 틈 메우기**도 함께 넣었습니다. 리눅스에서 프로그램 아이콘이 보이지 않던 문제를 고쳤습니다.

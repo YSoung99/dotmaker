@@ -12,4 +12,5 @@
 !/tools/
 /tools/*
 !/tools/build.mjs
+!/tools/export-lines.py
 .DS_Store
