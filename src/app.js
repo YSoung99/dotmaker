@@ -425,6 +425,7 @@ function save() {
 }
 
 function setSetting(key, value) {
+  rememberSettings('dot');
   state.settings = { ...state.settings, [key]: value };
   store.set('settings', state.settings);
   state.notice = null;
@@ -432,6 +433,48 @@ function setSetting(key, value) {
   update();
   redot();
 }
+
+// ───────────── 되돌리기(설정 히스토리)
+// 도트화·실험 탭의 설정 변경을 탭마다 기억해 Ctrl/⌘+Z로 되돌리고 Ctrl/⌘+Shift+Z로 다시 한다.
+const settingsHistory = { dot: { undo: [], redo: [] }, lab: { undo: [], redo: [] } };
+const HISTORY_LIMIT = 100;
+
+const settingsOf = tab => (tab === 'dot' ? { ...state.settings } : Object.fromEntries(LAB_KEYS.map(k => [k, state.lab[k]])));
+
+/** 설정을 바꾸기 직전에 부른다. 새로 바꾸면 '다시 하기'할 것은 버린다. */
+function rememberSettings(tab) {
+  const history = settingsHistory[tab];
+  history.undo.push(settingsOf(tab));
+  if (history.undo.length > HISTORY_LIMIT) history.undo.shift();
+  history.redo = [];
+}
+
+function restoreSettings(tab, saved) {
+  if (tab === 'dot') {
+    state.settings = saved;
+    store.set('settings', saved);
+    state.jevApplied = false;
+  } else {
+    Object.assign(state.lab, saved);
+    for (const k of LAB_KEYS) store.set('lab.' + k, state.lab[k]);
+    labReset();
+  }
+  state.notice = null;
+  update();
+  if (tab === 'dot') redot();
+}
+
+/** back: 되돌리기(아니면 다시 하기). 지금 탭이 도트화·실험이 아니거나 기록이 없으면 아무것도 안 한다. */
+function stepSettings(back) {
+  const history = settingsHistory[state.stage];
+  const from = back ? history?.undo : history?.redo;
+  if (!from?.length) return;
+  (back ? history.redo : history.undo).push(settingsOf(state.stage));
+  restoreSettings(state.stage, from.pop());
+}
+
+/** 글자를 입력하는 칸(입력칸·글상자)에 포커스가 있는지. 이때는 브라우저 기본 되돌리기를 쓴다. */
+const typing = () => document.activeElement?.matches('textarea, [contenteditable], input:not([type=checkbox]):not([type=radio]):not([type=color]):not([type=file])');
 
 // ───────────── AI 파일(설명서 탭)
 async function refreshAIFiles() {
@@ -787,6 +830,7 @@ function helpScreen() {
       '<b>도트화</b> 탭: 설정을 바꾸면 바로 다시 계산합니다. 계산 중에도 설정을 바꿀 수 있고, 마지막 설정으로 결과가 나옵니다.',
       '<b>PNG 저장…</b>: 지금 탭의 결과를 저장합니다. <kbd>Ctrl</kbd>+<kbd>S</kbd> · 저장 배율(1·2·4·8배)은 번짐 없이 키웁니다.',
       '<b>복사</b>: 지금 탭의 결과를 저장 배율대로 클립보드에 복사합니다. <kbd>Ctrl</kbd>+<kbd>C</kbd>',
+      '<b>되돌리기</b>: 도트화·실험 탭에서 설정을 바꾼 것을 하나씩 되돌립니다. <kbd>Ctrl</kbd>+<kbd>Z</kbd> · 다시 하기는 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>(맥은 <kbd>⌘</kbd>). 글자 입력 칸에 커서가 있을 때는 그 칸의 글자를 되돌립니다.',
       '<b>원본 보기</b>(결과 위 버튼): 결과 자리에 원본을 같은 위치·크기로 보여 줍니다. 눌러 가며 달라진 곳을 비교하세요.',
       '결과 크기·도트화 방식·AI 업스케일·체크 항목·저장 배율은 <b>다음에 켤 때도 그대로</b>입니다.',
     ])),
@@ -913,6 +957,7 @@ document.addEventListener('keydown', event => {
   const key = event.key.toLowerCase();
   if (key === 'o') { event.preventDefault(); $('file').click(); }
   if (key === 's') { event.preventDefault(); save(); }
+  if (key === 'z' && !typing()) { event.preventDefault(); stepSettings(!event.shiftKey); }
 });
 let dragDepth = 0;
 document.addEventListener('dragenter', event => { event.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });

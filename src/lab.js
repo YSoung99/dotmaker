@@ -53,6 +53,7 @@ const labSource = () => state.lab.input?.picture ?? state.original;
 
 function setLab(key, value) {
   const lab = state.lab;
+  rememberSettings('lab');
   lab[key] = value;
   if (key === 'mode' && !LAB_COUNTS[value].includes(lab.count)) lab.count = 64;
   for (const k of LAB_KEYS) store.set('lab.' + k, lab[k]);
