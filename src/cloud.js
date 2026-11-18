@@ -3,18 +3,31 @@
 // 세 서비스 모두 브라우저(file:// 포함) 호출을 허용한다(2026-11-08 확인). Gemini는 Api-Revision 헤더를 보내면 막힌다.
 const CLOUD = {
   pixellab: {
-    name: 'PixelLab', detail: '도트 전용 · 결과가 바로 도트 그림', host: 'api.pixellab.ai', price: '약 $0.01',
+    name: 'PixelLab', detail: '도트 전용 · 결과가 바로 도트 그림', host: 'api.pixellab.ai', price: '1장 약 $0.01',
     keyPage: 'https://www.pixellab.ai/', keyHint: 'PixelLab 계정의 API 토큰',
   },
   gemini: {
-    name: 'Gemini', detail: '나노 바나나 2.1 · 도트 느낌 그림 → 도트화', host: 'generativelanguage.googleapis.com', price: '약 $0.034',
+    name: 'Gemini', detail: '나노 바나나 2.1 · 도트 느낌 그림 → 도트화', host: 'generativelanguage.googleapis.com', price: '1장 약 $0.034',
     keyPage: 'https://aistudio.google.com/apikey', keyHint: 'Google AI Studio의 API 키',
   },
   openai: {
-    name: 'OpenAI', detail: 'GPT Image 2.5 · 도트 느낌 그림 → 도트화', host: 'api.openai.com', price: '약 $0.01~0.05',
+    name: 'OpenAI', detail: 'GPT Image 2.5 · 도트 느낌 그림 → 도트화', host: 'api.openai.com',
+    price: '쓴 토큰만큼(그림 출력 100만 토큰당 $30, 품질이 높을수록 많이 씀 · 실제 요금은 결과에 표시)',
     keyPage: 'https://platform.openai.com/api-keys', keyHint: 'OpenAI 플랫폼의 API 키(sk-…)',
   },
 };
+// OpenAI 모델과 토큰 요금(달러/100만 토큰). 두 모델은 요금이 같고 품질마다 쓰는 토큰 수가 다르다(2026-11-18 공식 문서 확인).
+const OPENAI_MODELS = { flare: 'gpt-image-2.5-flare', sunburst: 'gpt-image-2.5-sunburst' };
+const OPENAI_RATES = { imageInput: 8, textInput: 5, output: 30 };
+
+/** OpenAI 응답의 usage(토큰 수)로 이번 요금(달러)을 계산한다. usage가 없으면 null. */
+function openaiCost(usage) {
+  if (!usage) return null;
+  const image = usage.input_tokens_details?.image_tokens ?? 0;
+  const text = usage.input_tokens_details?.text_tokens ?? Math.max(0, (usage.input_tokens ?? 0) - image);
+  return (image * OPENAI_RATES.imageInput + text * OPENAI_RATES.textInput + (usage.output_tokens ?? 0) * OPENAI_RATES.output) / 1e6;
+}
+
 const CLOUD_PROMPT = 'Redraw this exact character as a clean pixel art sprite. Keep the same pose, face, expression, proportions and colors. '
   + 'Crisp 1-pixel dark outlines, flat colors with a small palette, no anti-aliasing, no blur, plain white background, nothing else in the image.';
 
@@ -192,7 +205,7 @@ async function cloudPaint(id, key, subject, size, options) {
     return { blob: base64ToBlob(b64), pixel: false, cost: null };
   }
   const form = new FormData();
-  form.append('model', 'gpt-image-2.5-sunburst');
+  form.append('model', OPENAI_MODELS[options.model] ?? OPENAI_MODELS.sunburst);
   form.append('image', input.blob, 'input.png');
   form.append('prompt', CLOUD_PROMPT);
   form.append('size', '1024x1024');
@@ -202,7 +215,8 @@ async function cloudPaint(id, key, subject, size, options) {
     method: 'POST', headers: { authorization: `Bearer ${key}` }, body: form,
   });
   if (!response.ok) throw await failure('OpenAI', response);
-  const b64 = findImage(await response.json());
+  const body = await response.json();
+  const b64 = findImage(body);
   if (!b64) throw new CloudError('OpenAI: 응답에 그림이 없습니다.');
-  return { blob: base64ToBlob(b64), pixel: false, cost: null };
+  return { blob: base64ToBlob(b64), pixel: false, cost: openaiCost(body.usage) };
 }

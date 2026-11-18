@@ -44,7 +44,8 @@ const state = {
     provider: ['pixellab', 'gemini', 'openai'].includes(store.get('cloud.provider', 'pixellab')) ? store.get('cloud.provider', 'pixellab') : 'pixellab',
     faithful: store.get('cloud.faithful', true),
     strength: store.get('cloud.strength', 300),
-    quality: store.get('cloud.quality', 'medium'),
+    quality: ['low', 'medium', 'high'].includes(store.get('cloud.quality', 'medium')) ? store.get('cloud.quality', 'medium') : 'medium',
+    model: store.get('cloud.model', 'sunburst') === 'flare' ? 'flare' : 'sunburst',   // OpenAI: Flare(빠름) / Sunburst(정밀)
     mode: store.get('cloud.mode', 'redraw') === 'correct' ? 'correct' : 'redraw',  // PixelLab: 다시 그리기 / 다듬기
     fix: store.get('cloud.fix', 0.1),                                                  // 다듬기 강도 0~1
     editingKey: false,
@@ -334,7 +335,7 @@ async function runCorrect() {
 
 function setCloud(key, value) {
   state.cloud[key] = value;
-  if (['provider', 'faithful', 'strength', 'quality', 'mode', 'fix'].includes(key)) store.set('cloud.' + key, value);
+  if (['provider', 'faithful', 'strength', 'quality', 'model', 'mode', 'fix'].includes(key)) store.set('cloud.' + key, value);
   update();
 }
 
@@ -346,7 +347,7 @@ async function runCloud() {
   if (correcting()) return runCorrect();
   const size = state.product ? [state.product.dotted.w, state.product.dotted.h] : dimensions();
   if (!size) return;
-  if (!confirm(`${input ? `넣은 그림 '${input.name}'` : '캐릭터 그림'}을(를) ${info.name}(${info.host})로 보내 AI 보정을 합니다.\n요금: 1장 ${info.price} (내 API 키 계정에 청구)\n\n계속할까요?`)) return;
+  if (!confirm(`${input ? `넣은 그림 '${input.name}'` : '캐릭터 그림'}을(를) ${info.name}(${info.host})로 보내 AI 보정을 합니다.\n요금: ${info.price} (내 API 키 계정에 청구)\n\n계속할까요?`)) return;
   state.cloud.result = null;
   try {
     const subject = input ? input.picture : (await engine.request('subject', {}, `${info.name}에 보낼 그림 준비 중`)).subject;
@@ -360,7 +361,7 @@ async function runCloud() {
     const done = await engine.request('cloud', { image, w: size[0], h: size[1], settings: { ...state.settings }, pixel: painted.pixel },
       painted.pixel ? 'AI 도트 그림 배경 지우는 중' : 'AI 그림을 도트화하는 중');
     const cost = painted.cost !== null && painted.cost !== undefined ? ` · 이번 요금 $${Number(painted.cost).toFixed(4)}` : '';
-    state.cloud.result = { ai, final: done.final, pixel: painted.pixel, status: `${info.name} · ${done.status}${cost}` };
+    state.cloud.result = { ai, final: done.final, pixel: painted.pixel, status: `${info.name}${id === 'openai' ? ` ${state.cloud.model === 'flare' ? 'Flare' : 'Sunburst'} · 품질 ${{ low: '낮음', medium: '보통', high: '높음' }[state.cloud.quality]}` : ''} · ${done.status}${cost}` };
   } catch (error) {
     state.busy = null;
     state.error = error instanceof CloudError ? error.message : `AI 보정을 하지 못했습니다. (${error.message})`;
@@ -723,7 +724,9 @@ function cloudControls() {
         : row(toggle('원본에 충실하게', c.faithful, v => setCloud('faithful', v), busy, 'PixelLab의 충실 모드(fixer). 끄면 AI가 도트 그림으로 새로 해석합니다.'),
           stepper(`원본 유지 ${c.strength}`, c.strength, 0, 600, 50, v => setCloud('strength', v), busy)))
     : c.provider === 'openai'
-      ? row(labelled('품질', segmented([['low', '낮음(싸고 빠름)'], ['medium', '보통']], c.quality, v => setCloud('quality', v), busy, '품질')))
+      ? row(labelled('모델', segmented([['flare', 'Flare(빠름)'], ['sunburst', 'Sunburst(정밀)']], c.model, v => setCloud('model', v), busy, 'OpenAI 모델')),
+        labelled('품질', segmented([['low', '낮음'], ['medium', '보통'], ['high', '높음']], c.quality, v => setCloud('quality', v), busy, '품질')),
+        el('span', { className: 'note', textContent: '두 모델은 토큰 요금이 같고, 품질이 높을수록 토큰을 많이 써서 비싸고 느립니다. 이번 요금은 받은 사용량으로 계산해 결과에 표시합니다.' }))
       : null;
   return el('div', { className: 'stack' },
     row(segmented(Object.entries(CLOUD).map(([id, v]) => [id, v.name]), c.provider, v => { c.editingKey = false; setCloud('provider', v); }, busy, 'AI 서비스'),
@@ -736,7 +739,7 @@ function cloudControls() {
     row(el('button', { type: 'button', className: 'primary', textContent: 'AI 보정 실행', disabled: busy || !(state.product || c.input) || !hasKey, onclick: runCloud }),
       el('span', { className: 'note', textContent: correcting()
         ? `실행하면 보낼 그림이 ${info.host}로 전송되고 요금이 듭니다(결과에 표시, 내 키 계정에 청구). 키는 이 컴퓨터의 암호화 저장소에 보관됩니다.`
-        : `실행하면 보낼 그림이 ${info.host}로 전송되고 1장에 ${info.price} 요금이 듭니다(내 키 계정에 청구). 키는 이 컴퓨터의 암호화 저장소에 보관됩니다.` })),
+        : `실행하면 보낼 그림이 ${info.host}로 전송되고 요금이 듭니다(${info.price}, 내 키 계정에 청구). 키는 이 컴퓨터의 암호화 저장소에 보관됩니다.` })),
   );
 }
 
@@ -886,7 +889,8 @@ function helpScreen() {
       '<b>AI 보정</b> 탭에서 서비스를 고르고 <b>내 API 키</b>를 넣은 뒤 <b>AI 보정 실행</b>을 누릅니다. 이 탭의 <b>결과 크기</b>(도트화 탭과 같은 값)로 결과가 나옵니다. 도트화 탭 이미지 대신 <b>다른 이미지 넣기…</b>(또는 이 탭에 끌어다 놓기)로 원하는 그림을 보낼 수도 있습니다.',
       '<b>PixelLab · 다시 그리기</b>: 도트 전용 AI라 결과가 바로 도트 그림입니다(배경만 지움). \'원본에 충실하게\'와 \'원본 유지\'(0~600, 높을수록 원본에 가깝게)로 조절합니다. 약 $0.01/장.',
       '<b>PixelLab · 다듬기</b>: 지금 도트화 결과를 크기 그대로 보내 잔점·계단 가장자리·색을 정리받습니다(투명 유지). 강도 0~1, 0.1부터 올려 보세요. 요금은 결과에 표시됩니다.',
-      '<b>Gemini</b>(나노 바나나 2.1) · <b>OpenAI</b>(GPT Image 2.5): 도트 느낌의 큰 그림을 받아 지금 도트화 설정으로 한 번 더 도트화합니다. 약 $0.034/장, $0.01~0.05/장.',
+      '<b>Gemini</b>(나노 바나나 2.1, 약 $0.034/장) · <b>OpenAI</b>(GPT Image 2.5): 도트 느낌의 큰 그림을 받아 지금 도트화 설정으로 한 번 더 도트화합니다.',
+      '<b>OpenAI 모델·품질</b>: <b>Flare</b>는 빠른 작은 모델, <b>Sunburst</b>는 정밀한 기본 모델입니다. 품질은 낮음·보통·높음. 요금은 쓴 토큰만큼(그림 출력 100만 토큰당 $30)이고 품질이 높을수록 토큰을 많이 써서 비쌉니다. 이번 요금은 결과에 표시됩니다.',
       '키 발급: PixelLab <code>pixellab.ai</code> 계정 · Gemini <code>aistudio.google.com/apikey</code> · OpenAI <code>platform.openai.com/api-keys</code>. 요금은 그 키의 계정에 청구됩니다(무료 사용량 없음).',
       '실행할 때마다 <b>캐릭터 그림이 그 서비스 서버로 전송</b>됩니다. 보내기 전에 받는 곳과 요금을 묻습니다. 키는 이 컴퓨터의 암호화 저장소에 보관되고(화면에는 끝 4자리만), \'키 지우기\'로 지울 수 있습니다.',
     ])),
