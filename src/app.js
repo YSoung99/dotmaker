@@ -852,8 +852,8 @@ function helpScreen() {
       '<b>AI가 느림</b>: 그래픽카드 가속을 못 쓰면 CPU로 돌아 느립니다. 색 배경 그림은 보통 1~3초, 처음 한 번은 모델 받기로 1분쯤 걸립니다.',
       '<b>캐릭터를 분리하지 못함</b>: 캐릭터 주위에 여백이 있는 원본이나 투명 PNG가 가장 잘 됩니다.',
     ])),
-    section('맥과 윈도우', list([
-      '맥용과 윈도우용은 같은 코드로 만들어 기능과 결과가 같습니다.',
+    section('맥·윈도우·리눅스', list([
+      '맥용·윈도우용·리눅스용(.deb·.AppImage)은 같은 코드로 만들어 기능과 결과가 같습니다.',
     ])),
     el('p', { className: 'muted', textContent: `도트메이커 ${VERSION} · 모델: skytnt/anime-seg (Apache-2.0), p1atdev/MangaLineExtraction-hf (MIT), Real-ESRGAN (BSD-3-Clause) · 실행 도구: onnxruntime-web (MIT) · 프로그램 본체: Electron (MIT)` }),
   );
@@ -879,18 +879,12 @@ function update() {
     tab.tabIndex = selected ? 0 : -1;
   }
   $('scale').value = String(state.exportScale);
-  const focused = document.activeElement?.getAttribute('aria-label');
   const scroll = $('panel').firstChild?.scrollTop ?? 0;
   const sheetScroll = document.querySelector('.sheet')?.scrollTop ?? 0;
   $('panel').replaceChildren(screen(state.stage));
   $('panel').firstChild.scrollTop = scroll;
   const sheet = document.querySelector('.sheet');
   if (sheet) sheet.scrollTop = sheetScroll;
-  if (focused === '가로' || focused === '세로') {
-    const input = document.querySelector(`[aria-label="${focused}"]`);
-    input?.focus();
-    input?.setSelectionRange(input.value.length, input.value.length);
-  }
 }
 
 // ───────────── 시작
