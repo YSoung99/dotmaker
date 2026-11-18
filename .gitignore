@@ -10,6 +10,8 @@
 !/src/
 !/docs/
 !/tools/
+!/test/
+!/.github/
 /tools/*
 !/tools/build.mjs
 !/tools/export-lines.py

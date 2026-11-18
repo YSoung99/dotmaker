@@ -11,6 +11,7 @@
   "desktopName": "dotmaker.desktop",
   "scripts": {
     "build": "node tools/build.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
     "start": "node tools/build.mjs && electron .",
     "dist:win": "node tools/build.mjs && electron-builder --win nsis --x64 --publish never",
     "dist:mac": "node tools/build.mjs && electron-builder --mac dmg --arm64 --publish never -c.productName=DotMaker",
