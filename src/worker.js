@@ -52,7 +52,7 @@ async function handle(job) {
     } else if (job.type === 'redot') {
       const { w, h } = current.reduced.image.grid;
       if (upscaleModel(current.raw, job.settings.upscale, Math.max(w, h)) !== current.wanted) {
-        current = await load(current.raw, w, h, job.settings, progress);
+        current = await load(current.raw, w, h, job.settings, progress, current.whole);
       } else if (wantsLines(job.settings) && !current.lines) {
         current.lines = await extractLines(current.subject, progress);
       }
