@@ -311,7 +311,7 @@ function result(stage = state.stage) {
 
 // ───────────── AI 보정(클라우드)
 /** PixelLab 다듬기: 지금 도트화 결과를 크기 그대로 보내 정리받는다. */
-async function runCorrect(key) {
+async function runCorrect() {
   const before = state.cloud.input?.picture ?? state.product.dotted, strength = state.cloud.fix;
   if (before.w * before.h > 1024 * 1024) { state.error = 'PixelLab 다듬기는 1024×1024 넓이까지입니다. 더 작은 도트 그림을 넣어 주세요.'; update(); return; }
   if (!confirm(`${state.cloud.input ? `넣은 그림 '${state.cloud.input.name}'` : '지금 도트화 결과'}(${before.w}×${before.h})를 PixelLab(api.pixellab.ai)로 보내 다듬기를 합니다.\n요금: PixelLab이 정하며 결과에 표시됩니다 (내 API 키 계정에 청구)\n\n계속할까요?`)) return;
@@ -320,7 +320,7 @@ async function runCorrect(key) {
   state.error = null;
   update();
   try {
-    const corrected = await cloudCorrect(key, before, strength);
+    const corrected = await cloudCorrect(await cloudKey.get('pixellab'), before, strength);
     const image = await decode(corrected.blob);
     const final = { w: image.w, h: image.h, bytes: Raster.fromPremultiplied(image.data, image.w, image.h).straightBytes() };
     const cost = corrected.cost !== null && corrected.cost !== undefined ? ` · 이번 요금 $${Number(corrected.cost).toFixed(4)}` : '';
@@ -341,9 +341,9 @@ function setCloud(key, value) {
 const correcting = () => state.cloud.provider === 'pixellab' && state.cloud.mode === 'correct';
 
 async function runCloud() {
-  const id = state.cloud.provider, info = CLOUD[id], key = cloudKey.get(id), input = state.cloud.input;
-  if (!(state.product || input) || !key || state.busy) return;
-  if (correcting()) return runCorrect(key);
+  const id = state.cloud.provider, info = CLOUD[id], input = state.cloud.input;
+  if (!(state.product || input) || !cloudKey.tail(id) || state.busy) return;
+  if (correcting()) return runCorrect();
   const size = state.product ? [state.product.dotted.w, state.product.dotted.h] : dimensions();
   if (!size) return;
   if (!confirm(`${input ? `넣은 그림 '${input.name}'` : '캐릭터 그림'}을(를) ${info.name}(${info.host})로 보내 AI 보정을 합니다.\n요금: 1장 ${info.price} (내 API 키 계정에 청구)\n\n계속할까요?`)) return;
@@ -353,7 +353,7 @@ async function runCloud() {
     state.busy = `${info.name}가 그리는 중 (보통 몇 초~1분)`;
     state.error = null;
     update();
-    const painted = await cloudPaint(id, key, subject, size, state.cloud);
+    const painted = await cloudPaint(id, await cloudKey.get(id), subject, size, state.cloud);
     const image = await decode(painted.blob);
     const ai = { w: image.w, h: image.h, bytes: Raster.fromPremultiplied(image.data, image.w, image.h).straightBytes() };
     state.busy = null;
@@ -613,19 +613,21 @@ function controls(stage) {
 
 /** API 키 줄: 저장돼 있으면 끝 4자리와 바꾸기·지우기, 없으면 입력칸. AI 보정 탭이 쓴다. */
 function keyRow(id) {
-  const c = state.cloud, info = CLOUD[id], key = cloudKey.get(id);
-  if (key && c.editingKey !== id) {
-    return row(el('span', { textContent: `${info.name} API 키 저장됨 (…${key.slice(-4)})` }),
+  const c = state.cloud, info = CLOUD[id], tail = cloudKey.tail(id);
+  if (tail && c.editingKey !== id) {
+    return row(el('span', { textContent: `${info.name} API 키 저장됨 (…${tail})` }),
       el('button', { type: 'button', textContent: '키 바꾸기', onclick: () => setCloud('editingKey', id) }),
-      el('button', { type: 'button', textContent: '키 지우기', onclick: () => { cloudKey.clear(id); update(); } }));
+      el('button', { type: 'button', textContent: '키 지우기', onclick: async () => { await cloudKey.clear(id).catch(console.error); update(); } }));
   }
   const input = el('input', { type: 'password', placeholder: info.keyHint, autocomplete: 'off', spellcheck: false, className: 'key' });
   input.setAttribute('aria-label', `${info.name} API 키`);
-  const saveKey = () => {
+  const saveKey = async () => {
     const value = input.value.trim();
     if (!value) return;
-    cloudKey.set(id, value);
+    input.value = '';
+    const kept = await cloudKey.set(id, value);
     c.editingKey = false;
+    state.notice = kept ? null : '이 컴퓨터에서 암호화 저장소를 쓸 수 없어, 키를 이번 실행 동안만 기억합니다.';
     update();
   };
   input.onkeydown = event => { if (event.key === 'Enter') saveKey(); };
@@ -665,7 +667,7 @@ function inputRow() {
 }
 
 function cloudControls() {
-  const c = state.cloud, info = CLOUD[c.provider], key = cloudKey.get(c.provider), busy = Boolean(state.busy);
+  const c = state.cloud, info = CLOUD[c.provider], hasKey = Boolean(cloudKey.tail(c.provider)), busy = Boolean(state.busy);
   const options = c.provider === 'pixellab'
     ? el('div', { className: 'stack' },
       row(segmented([['redraw', '다시 그리기'], ['correct', '다듬기']], c.mode, v => setCloud('mode', v), busy, 'PixelLab 방식'),
@@ -688,10 +690,10 @@ function cloudControls() {
     // 다듬기에 따로 넣은 그림은 크기 그대로 보내므로 결과 크기를 쓰지 않는다.
     row(sizeControl(correcting() && Boolean(c.input)), upscaleControl(), el('span', { className: 'note', textContent: '다시 그린 그림을 도트화하기 전에 적용됩니다(받은 그림이 이미 도트 그림이면 쓰지 않음)' })),
     inputRow(),
-    row(el('button', { type: 'button', className: 'primary', textContent: 'AI 보정 실행', disabled: busy || !(state.product || c.input) || !key, onclick: runCloud }),
+    row(el('button', { type: 'button', className: 'primary', textContent: 'AI 보정 실행', disabled: busy || !(state.product || c.input) || !hasKey, onclick: runCloud }),
       el('span', { className: 'note', textContent: correcting()
-        ? `실행하면 보낼 그림이 ${info.host}로 전송되고 요금이 듭니다(결과에 표시, 내 키 계정에 청구). 키는 이 프로그램에만 저장됩니다.`
-        : `실행하면 보낼 그림이 ${info.host}로 전송되고 1장에 ${info.price} 요금이 듭니다(내 키 계정에 청구). 키는 이 프로그램에만 저장됩니다.` })),
+        ? `실행하면 보낼 그림이 ${info.host}로 전송되고 요금이 듭니다(결과에 표시, 내 키 계정에 청구). 키는 이 컴퓨터의 암호화 저장소에 보관됩니다.`
+        : `실행하면 보낼 그림이 ${info.host}로 전송되고 1장에 ${info.price} 요금이 듭니다(내 키 계정에 청구). 키는 이 컴퓨터의 암호화 저장소에 보관됩니다.` })),
   );
 }
 
@@ -841,7 +843,7 @@ function helpScreen() {
       '<b>PixelLab · 다듬기</b>: 지금 도트화 결과를 크기 그대로 보내 잔점·계단 가장자리·색을 정리받습니다(투명 유지). 강도 0~1, 0.1부터 올려 보세요. 요금은 결과에 표시됩니다.',
       '<b>Gemini</b>(나노 바나나 2.1) · <b>OpenAI</b>(GPT Image 2.5): 도트 느낌의 큰 그림을 받아 지금 도트화 설정으로 한 번 더 도트화합니다. 약 $0.034/장, $0.01~0.05/장.',
       '키 발급: PixelLab <code>pixellab.ai</code> 계정 · Gemini <code>aistudio.google.com/apikey</code> · OpenAI <code>platform.openai.com/api-keys</code>. 요금은 그 키의 계정에 청구됩니다(무료 사용량 없음).',
-      '실행할 때마다 <b>캐릭터 그림이 그 서비스 서버로 전송</b>됩니다. 보내기 전에 받는 곳과 요금을 묻습니다. 키는 이 프로그램에만 저장되고, \'키 지우기\'로 지울 수 있습니다.',
+      '실행할 때마다 <b>캐릭터 그림이 그 서비스 서버로 전송</b>됩니다. 보내기 전에 받는 곳과 요금을 묻습니다. 키는 이 컴퓨터의 암호화 저장소에 보관되고(화면에는 끝 4자리만), \'키 지우기\'로 지울 수 있습니다.',
     ])),
     section('문제 해결', list([
       '<b>설치할 때 \'Windows의 PC 보호\' 창이 뜸</b>: 개발자 서명이 없는 프로그램이라 그렇습니다. <b>추가 정보 → 실행</b>을 누르세요.',
@@ -894,6 +896,7 @@ function update() {
 // ───────────── 시작
 $('version').textContent = VERSION;
 checkUpdate();
+cloudKey.load().then(update, console.error);
 $('open').onclick = () => $('file').click();
 $('file').onchange = event => { openFiles([...event.target.files]); event.target.value = ''; };
 $('save').onclick = save;
