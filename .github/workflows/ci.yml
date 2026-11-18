@@ -1,0 +1,23 @@
+# PR·푸시마다: 화면 파일 만들기(build.mjs)와 스냅샷 테스트(npm test)
+name: 빌드·테스트
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: node tools/build.mjs
+      - run: npm test

@@ -1,0 +1,71 @@
+# 태그(v*)를 푸시하면 윈도우·맥·리눅스 설치 파일을 각 OS 러너에서 만들어 그 태그의 릴리스에 올린다.
+# 릴리스가 없으면 초안(draft)으로 만든다: 설치 안내를 적은 뒤 직접 '공개'를 눌러야 새 버전 알림이 뜬다.
+# 같은 이름의 파일이 이미 있으면 덮어쓴다.
+name: 설치 파일 릴리스
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: dist:win
+            files: release/*.exe
+          - os: macos-latest
+            script: dist:mac
+            files: release/*.dmg
+          - os: ubuntu-latest
+            script: dist:linux
+            files: |
+              release/*.deb
+              release/*.AppImage
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: 태그와 package.json 버전이 같은지 확인
+        shell: bash
+        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      - run: npm run ${{ matrix.script }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.script }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - name: 릴리스에 올리기
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -l release
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --draft --verify-tag \
+              --title "도트메이커 ${TAG#v} (맥·윈도우·리눅스)" \
+              --notes "바뀐 점은 README의 업데이트 기록을 보세요. (설치 안내를 적은 뒤 공개하세요)"
+          fi
+          gh release upload "$TAG" release/* --clobber
