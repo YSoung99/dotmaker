@@ -447,7 +447,9 @@ async function importAIFiles(files) {
     const id = identifyAIFile(file.size);
     if (!id) { unknown.push(file.name); continue; }
     try {
-      await fileStore.put(id, new Uint8Array(await file.arrayBuffer()));
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (!(await matchesHash(id, bytes))) { unknown.push(`${file.name}(크기는 같지만 내용이 원본과 다름)`); continue; }
+      await fileStore.put(id, bytes);
       saved.push(AI_FILES[id].name);
     } catch (error) {
       console.error(error);
@@ -828,7 +830,7 @@ function helpScreen() {
     section('AI 파일',
       el('p', { innerHTML: 'AI 기능(AI 업스케일·배경 분리·선 추출)은 처음 쓸 때 아래 파일을 <b>자동으로 받아 이 프로그램의 저장소에 보관</b>합니다(받다 끊기면 이어받음). 그다음부터는 인터넷 없이 됩니다.' }),
       el('p', { innerHTML: '<b>넣을 경로는 따로 없습니다.</b> 파일은 폴더가 아니라 프로그램 저장소(IndexedDB, 이름 <code>dotmaker-ai</code>)에 들어갑니다. 아래 <b>저장된 AI 파일 지우기</b>로 지울 수 있습니다.' }),
-      el('p', { innerHTML: '<b>직접 받아 넣기</b>(인터넷이 막힌 PC 등): 아래 <b>받는 주소</b>에서 파일을 받아(열리면 오른쪽 클릭 → \'다른 이름으로 링크 저장\') 어느 폴더에 두든 상관없이, <b>AI 파일 불러오기…</b>로 한꺼번에 고르면 됩니다. 파일은 크기로 알아보니 이름이 바뀌어도 괜찮지만, 내용(크기)은 그대로여야 합니다.' }),
+      el('p', { innerHTML: '<b>직접 받아 넣기</b>(인터넷이 막힌 PC 등): 아래 <b>받는 주소</b>에서 파일을 받아(열리면 오른쪽 클릭 → \'다른 이름으로 링크 저장\') 어느 폴더에 두든 상관없이, <b>AI 파일 불러오기…</b>로 한꺼번에 고르면 됩니다. 파일은 크기로 알아보니 이름이 바뀌어도 괜찮지만, 내용은 그대로여야 합니다(넣을 때 sha256으로 원본과 같은지 확인합니다).' }),
       el('p', { className: 'muted', textContent: '필요한 파일: 배경 분리 = 실행 도구 3개 + isnetis.onnx · 선 추출 = 실행 도구 3개 + model.safetensors' }),
       el('div', { className: 'table-wrap' }, table),
       actions,
