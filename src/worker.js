@@ -97,7 +97,7 @@ async function handle(job) {
       }
       const cut = picture(subject);
       self.postMessage({ id: job.id, type: 'done', subject: cut }, [cut.bytes.buffer]);
-    } else if (job.type === 'lab') {
+    } else if (job.type === 'lab' || job.type === 'labBatch') {
       // 실험 탭: 받은 그림을 그 탭 설정으로 도트로 바꾼다(lab-core.js). 지금 열어 둔 그림은 건드리지 않는다.
       const result = labCompute(job.source, job.options);
       self.postMessage({ id: job.id, type: 'done', ...result }, [result.bytes.buffer]);

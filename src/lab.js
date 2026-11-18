@@ -80,6 +80,13 @@ async function labCutout(raw) {
   if (lab.cutting === raw) return;
   lab.cutting = raw;
   await null;   // 화면을 그리는 도중에 불리므로, 그리기가 끝난 뒤에 요청한다
+  lab.cut = { from: raw, picture: await labCutoutPicture(raw, '배경 지우는 중') };
+  if (lab.cutting === raw) lab.cutting = null;
+  update();
+}
+
+/** 작업자에게 배경을 지운 그림을 받는다. 못 지우면 null(오류 문구는 띄우지 않는다). */
+async function labCutoutPicture(raw, label) {
   const data = new Uint8Array(raw.bytes.length);
   for (let i = 0; i < data.length; i += 4) {
     const a = raw.bytes[i + 3];
@@ -89,20 +96,57 @@ async function labCutout(raw) {
     data[i + 3] = a;
   }
   try {
-    const { subject } = await engine.request('cutout', { image: { w: raw.w, h: raw.h, data } }, '배경 지우는 중');
-    lab.cut = { from: raw, picture: subject };
+    return (await engine.request('cutout', { image: { w: raw.w, h: raw.h, data } }, label)).subject;
   } catch {
-    lab.cut = { from: raw, picture: null };
     state.error = null;
+    return null;
   }
-  if (lab.cutting === raw) lab.cutting = null;
-  update();
 }
 
 
 /** 커스텀 팔레트(16진수 글자)를 [r, g, b] 목록으로 */
 const labPaletteRGB = lab => lab.palette.slice(0, lab.count)
   .map(hex => [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)]);
+
+/** 작업자에 넘길 실험 탭 설정. 결과 크기를 골랐으면 긴 변이 그 칸 수가 되게 묶는다(원본이 더 작으면 원본 크기 그대로). */
+function labOptions(source) {
+  const lab = state.lab, maple = lab.method === 'maple';
+  return { wanted: lab.size ? Math.max(1, Math.max(source.w, source.h) / lab.size) : lab.block,
+    method: lab.method, protect: lab.protect, repair: lab.repair, count: lab.count,
+    palette: lab.mode === 'custom' && !maple ? labPaletteRGB(lab) : null,
+    maple: { materials: lab.mapleMaterials, tones: lab.mapleTones, outline: lab.mapleOutline, hueShift: lab.mapleHueShift, boundary: lab.mapleBoundary } };
+}
+
+/** 여러 장: 지금 실험 탭 설정(배경 지우기 포함)으로 모두 바꿔 고른 폴더에 저장 배율대로 저장한다. 이 탭의 그림·결과는 그대로 둔다. */
+async function labBatch(files) {
+  if (state.busy) return;
+  const folder = await desktop?.pickFolder?.();
+  if (!folder) return;
+  const scale = state.exportScale, cutout = state.lab.cutout, failed = [];
+  let saved = 0;
+  state.notice = null;
+  for (const [k, file] of files.entries()) {
+    const label = `실험 탭 여러 장 변환 중 (${k + 1}/${files.length}) · ${file.name}`;
+    try {
+      state.busy = label; state.error = null; update();
+      const raw = await loadPictureFile(file);
+      const source = (cutout && await labCutoutPicture(raw, label)) || raw;
+      // 설정은 그림마다 그때 값으로(결과 크기는 그림 크기에 따라 달라진다). 'labBatch'는 화면의 실험 탭 계산에 밀려 버려지지 않는다.
+      const done = await engine.request('labBatch', { source, options: labOptions(source) }, label);
+      const picture = scaled({ w: done.w, h: done.h, bytes: done.bytes }, scale);
+      const blob = await new Promise(resolve => toCanvas(picture).toBlob(resolve, 'image/png'));
+      await desktop.writeToFolder(outputName(file.name, 'lab', done, scale), new Uint8Array(await blob.arrayBuffer()));
+      saved++;
+    } catch (error) {
+      console.error(error);
+      failed.push(file.name);
+    }
+  }
+  state.busy = null;
+  state.error = null;
+  state.notice = `실험 탭 여러 장 변환: ${saved}장을 '${folder}' 폴더에 저장했습니다` + (failed.length ? ` · 실패 ${failed.length}장 (${failed.join(', ')})` : '');
+  update();
+}
 
 /** 지금 설정으로 결과를 다시 만든다(그림이 없거나 이미 계산 중이면 아무것도 안 함). 계산은 작업자가 한다. */
 function labRun() {
@@ -112,13 +156,8 @@ function labRun() {
   if (lab.cutout && lab.cut?.from !== raw) { labCutout(raw); return; }
   const source = lab.cutout && lab.cut.picture ? lab.cut.picture : raw;
   const backdrop = !lab.cutout ? '' : lab.cut.picture ? ' · 배경 지움' : ' · 배경을 지우지 못해 그림 전체를 변환';
-  // 결과 크기를 골랐으면 긴 변이 그 칸 수가 되게 묶는다(원본이 더 작으면 키우지 않고 원본 크기 그대로).
-  const longSide = Math.max(source.w, source.h);
-  const wanted = lab.size ? Math.max(1, longSide / lab.size) : lab.block;
-  const maple = lab.method === 'maple';
-  const options = { wanted, method: lab.method, protect: lab.protect, repair: lab.repair, count: lab.count,
-    palette: lab.mode === 'custom' && !maple ? labPaletteRGB(lab) : null,
-    maple: { materials: lab.mapleMaterials, tones: lab.mapleTones, outline: lab.mapleOutline, hueShift: lab.mapleHueShift, boundary: lab.mapleBoundary } };
+  const longSide = Math.max(source.w, source.h), maple = lab.method === 'maple';
+  const options = labOptions(source), wanted = options.wanted;
   const ticket = lab.running = { options };
   // 화면을 그리는 도중에 불리므로, 그리기가 끝난 뒤에 맡긴다. 실패하면 설정을 바꿀 때까지 다시 시도하지 않는다.
   Promise.resolve().then(() => engine.submit('lab', { source, options }, '실험 탭 도트 계산 중', done => {

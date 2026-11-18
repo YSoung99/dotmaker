@@ -220,10 +220,10 @@ function applyOpened(data, original, name) {
   if (state.stage !== 'help') state.stage = 'dot';
 }
 
-/** 한 장이면 열고, 여러 장이면 지금 설정으로 모두 도트화해 고른 폴더에 저장한다. */
+/** 한 장이면 열고, 여러 장이면 지금 설정으로 모두 바꿔 고른 폴더에 저장한다(실험 탭에서는 실험 탭 설정으로). */
 function openFiles(files) {
   const images = files.filter(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name));
-  if (images.length > 1) batch(images); else open(images[0]);
+  if (images.length > 1) (state.stage === 'lab' ? labBatch : batch)(images); else open(images[0]);
 }
 
 async function batch(files) {
@@ -846,6 +846,7 @@ function helpScreen() {
       '<b>메이플 램프</b>: 비슷한 색을 재질로 묶고(재질 수 2~16), 재질마다 밝기 단계(음영 2~5단계)와 색 있는 윤곽선을 만듭니다. 게임 스킨처럼 명암과 색을 살릴 때 씁니다. <b>윤곽선</b>은 진한 잉크(한 가지 진한 고동색)·재질 색(재질마다 어두운 색)·없음 중에서 고르고, <b>휴 시프트</b>는 그림자를 보라·파랑 쪽으로 틀어 색감을 살리며, <b>재질 경계선</b>은 색이 크게 다른 재질 사이에 선을 긋습니다. 혼자 튀는 음영 점은 자동으로 정리합니다. 팔레트(색 뽑는 방식)는 쓰지 않습니다.',
       '<b>작은 디테일 지키기</b>(투표): 칸보다 가는 선과 눈 하이라이트가 사라지지 않게 합니다. <b>외곽선 틈 메우기</b>(투표): 배경을 지운 그림의 어두운 바깥 외곽선이 한 칸 끊긴 곳을 메웁니다.',
       '<b>자동 추출</b>: 그림에서 가장 가까운 8~256색을 골라 원본 색감을 유지합니다. <b>커스텀 팔레트</b>: 색 칸을 눌러 정한 색만 씁니다(기본은 옛 PC 느낌의 16색).',
+      '<b>여러 장 한꺼번에</b>: 실험 탭에서 이미지를 여러 장 끌어다 놓거나 <b>이미지 열기…</b>로 여러 장 고르면, 저장할 폴더를 묻고 <b>실험 탭 설정</b>(배경 지우기·줄이는 방식·색·저장 배율)으로 모두 바꿔 그 폴더에 저장합니다.',
       '베타 기능이라 동작과 화면이 바뀔 수 있습니다.',
     ])),
     section('도트화 설정', list([
@@ -989,8 +990,10 @@ document.addEventListener('copy', event => {
 function takeFiles(files) {
   const file = files.find(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name));
   if (!file) return;
-  // AI 보정 탭에서는 그 탭의 그림으로 넣고, 다른 탭에서는 도트화할 원본으로 연다.
-  if (state.stage === 'repair' || state.stage === 'lab') {
+  // AI 보정·실험 탭에서는 그 탭의 그림으로 넣고(실험 탭에 여러 장이면 일괄 변환), 다른 탭에서는 도트화할 원본으로 연다.
+  if (state.stage === 'lab' && files.filter(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name)).length > 1) {
+    openFiles(files);
+  } else if (state.stage === 'repair' || state.stage === 'lab') {
     loadPictureFile(file).then(picture => (state.stage === 'lab' ? setLabInput(picture, file.name) : setCloudInput(picture, file.name)))
       .catch(error => { state.error = error.message; update(); });
   } else openFiles(files);
