@@ -222,10 +222,11 @@ function labNearest(r, g, b, palette) {
 }
 
 /**
- * 실험 탭 결과 한 장: 줄이기(평균/투표) → 외곽선 틈 메우기 → 팔레트 색으로 바꾸기.
- * options: { wanted: 원본 몇 픽셀을 한 칸으로, method, protect, repair, palette: 커스텀 색 [[r,g,b]…] 또는 null(자동), count }
+ * 실험 탭 결과 한 장: 줄이기(평균/투표) → 외곽선 틈 메우기 → 팔레트 색으로 바꾸기. 메이플 램프는 maple.js가 색까지 정한다.
+ * options: { wanted: 원본 몇 픽셀을 한 칸으로, method, protect, repair, palette: 커스텀 색 [[r,g,b]…] 또는 null(자동), count, maple: 메이플 램프 설정 }
  */
 function labCompute(source, options) {
+  if (options.method === 'maple') return labMaple(source, options);
   const voting = options.method === 'vote';
   const small = voting ? labVote(source, options.wanted, options.protect) : labShrink(source, options.wanted);
   const mended = voting && options.repair ? labRepairOutline(small) : 0;
@@ -240,4 +241,15 @@ function labCompute(source, options) {
     used.add(k);
   }
   return { w: small.w, h: small.h, bytes: px, scale: small.scale, kept: small.kept ?? 0, mended, used: used.size };
+}
+
+/** 메이플 램프: 평균 방식과 같은 칸 수로 maple.js에 맡긴다(팔레트는 쓰지 않음). */
+function labMaple(source, options) {
+  const scale = Math.max(options.wanted, Math.max(source.w, source.h) / LAB_MAX_SIDE);
+  const w = Math.max(1, Math.round(source.w / scale)), h = Math.max(1, Math.round(source.h / scale));
+  const built = mapleBuild(source, w, h, options.maple), used = new Set();
+  for (let i = 0; i < built.bytes.length; i += 4) {
+    if (built.bytes[i + 3]) used.add((built.bytes[i] << 16) | (built.bytes[i + 1] << 8) | built.bytes[i + 2]);
+  }
+  return { w, h, bytes: built.bytes, scale, kept: 0, mended: 0, used: used.size, materials: built.materials, specks: built.specks };
 }

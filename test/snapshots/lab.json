@@ -33,5 +33,33 @@
     "mended": 0,
     "used": 16,
     "sha256": "908cc97a63fe9f6ca0294a6399eebb7f63ed34b9e8a7d47f51b3bbbf7e3ef775"
+  },
+  "character 메이플 진한 잉크": {
+    "size": "32x27",
+    "materials": 7,
+    "specks": 0,
+    "used": 7,
+    "sha256": "5e5fc225aa0b2d1bd36f59de59b2e4b8d7adde30f7c827fccd2a404a9899c5d4"
+  },
+  "character 메이플 재질 색 윤곽선": {
+    "size": "32x27",
+    "materials": 7,
+    "specks": 0,
+    "used": 11,
+    "sha256": "dfd2eee8258b5636110cc6e616e1de1e9213820294e53a0efef4ff31690766c4"
+  },
+  "character 메이플 윤곽선 없음·휴 시프트 끔": {
+    "size": "32x27",
+    "materials": 7,
+    "specks": 2,
+    "used": 12,
+    "sha256": "ec2235515d14e705969d5ad4226b0b9b21f869b78d594f97e3816782d660be12"
+  },
+  "scene 메이플 재질 4·음영 5": {
+    "size": "40x30",
+    "materials": 4,
+    "specks": 5,
+    "used": 23,
+    "sha256": "9c4e3e9dd809a782294b5371294a726b970037a44579d40c96e1b60acda0a4dc"
   }
 }
