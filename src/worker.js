@@ -97,6 +97,10 @@ async function handle(job) {
       }
       const cut = picture(subject);
       self.postMessage({ id: job.id, type: 'done', subject: cut }, [cut.bytes.buffer]);
+    } else if (job.type === 'lab') {
+      // 실험 탭: 받은 그림을 그 탭 설정으로 도트로 바꾼다(lab-core.js). 지금 열어 둔 그림은 건드리지 않는다.
+      const result = labCompute(job.source, job.options);
+      self.postMessage({ id: job.id, type: 'done', ...result }, [result.bytes.buffer]);
     } else if (job.type === 'cloud') {
       // 클라우드 AI 그림 마무리. 도트 그림(PixelLab)은 배경만 지우고, 아니면 지금 설정으로 도트화한다.
       const { image, w, h, settings, pixel } = job;

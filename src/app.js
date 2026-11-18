@@ -94,7 +94,7 @@ const engine = (() => {
   return {
     submit(type, payload, label, apply, fail) {
       if (!worker) { state.error = '이 브라우저에서 작업자를 시작하지 못했습니다. 크롬·엣지 최신 버전으로 열어 주세요.'; update(); fail?.(state.error); return; }
-      const drops = { open: ['open', 'resize', 'redot'], resize: ['resize', 'redot'], redot: ['redot'] }[type] ?? [];
+      const drops = { open: ['open', 'resize', 'redot'], resize: ['resize', 'redot'], redot: ['redot'], lab: ['lab'] }[type] ?? [];
       waiting = waiting.filter(job => !drops.includes(job.type));
       waiting.push({ id: nextId++, type, payload, label, apply, fail });
       if (running) { state.busy = label; updateStatus(); }
@@ -213,7 +213,7 @@ function applyOpened(data, original, name) {
   state.original = { w: original.w, h: original.h, bytes: Raster.fromPremultiplied(original.data, original.w, original.h).straightBytes() };
   state.fileName = name;
   state.cloud.result = null;
-  state.lab.result = null;
+  labReset();
   state.aligned = null;
   state.compare = false;
   if (state.stage !== 'help') state.stage = 'dot';
