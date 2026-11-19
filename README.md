@@ -88,7 +88,7 @@ npm run dist       # 설치 파일 만들기: release/ 에 윈도우 .exe, 맥 .
 
 `npm run dist:win`, `npm run dist:mac`, `npm run dist:linux`로 한쪽만 만들 수도 있습니다. `dist/`와 `release/`는 만들어지는 파일이라 저장소에 올리지 않습니다.
 
-**릴리스에 올릴 파일**: 설치 파일과 함께 `release/`에 생기는 `latest.yml`(윈도우), `latest-mac.yml`과 `DotMaker-…-mac-arm64.zip`(맥), `latest-linux.yml`(AppImage·deb), `*.blockmap`도 같은 릴리스에 올려야 프로그램 안 업데이트가 새 버전을 찾습니다. 태그는 `v3.10.0`처럼 `v`+버전으로 붙입니다.
+**릴리스 만들기**: `package.json` 버전을 올리고 README 업데이트 기록에 그 버전 줄을 쓴 뒤, `git tag v3.10.0 && git push origin v3.10.0`처럼 v+버전 태그를 올리면 깃허브가 윈도우·맥·리눅스 설치 파일을 각각 만들어 릴리스로 올립니다([`.github/workflows/release.yml`](.github/workflows/release.yml)). 프로그램 안 업데이트에 필요한 `latest*.yml`·`*.blockmap`·맥 `.zip`도 함께 올라가고, 릴리스 설명은 README의 그 버전 줄을 씁니다.
 
 윈도우 설치 파일을 맥·리눅스에서 만들 때는 `wine`이 있어야 합니다(프로그램 아이콘·버전 정보를 넣는 데 씀).
 

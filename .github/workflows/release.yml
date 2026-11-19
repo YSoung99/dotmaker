@@ -1,0 +1,72 @@
+# 릴리스 만들기: `v3.10.0`처럼 v+버전 태그를 올리면 윈도우·맥·리눅스 설치 파일을 각 운영체제에서 만들고,
+# 프로그램 안 업데이트에 필요한 latest*.yml·*.blockmap과 함께 깃허브 릴리스로 올린다.
+# 릴리스 설명은 README '업데이트 기록'의 그 버전 줄을 쓴다.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: windows-latest
+            script: dist:win
+          - os: macos-latest
+            script: dist:mac
+          - os: ubuntu-latest
+            script: dist:linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: 태그와 package.json 버전이 같은지 확인
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "package.json 버전($version)과 태그($GITHUB_REF_NAME)가 다릅니다"; exit 1; }
+      - run: npm ci
+      - run: npm run ${{ matrix.script }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+            release/*.AppImage
+            release/*.deb
+            release/*.blockmap
+            release/latest*.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: 릴리스 설명 만들기
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          grep -m1 -F -- "- **${version}**:" README.md | sed -E "s/^- \*\*${version//./\\.}\*\*: ?//" > notes.md || true
+          [ -s notes.md ] || echo "도트메이커 ${version}" > notes.md
+          printf '\n\n받는 법·설치 방법은 [README](https://github.com/%s#-받기)를 보세요.\n' "$GITHUB_REPOSITORY" >> notes.md
+          cat notes.md
+          ls -la out
+      - name: 깃허브 릴리스 올리기
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" out/* --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
