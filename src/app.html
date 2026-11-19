@@ -18,6 +18,7 @@
   --accent-text: #ffffff;
   --checker-a: #f6f5f3;
   --checker-b: #e9e7e3;
+  --grid-line: rgba(0,0,0,.18);
   --error: #c4322f;
   --focus: #2f6fd6;
 }
@@ -33,6 +34,7 @@
     --accent: #e8679f;
     --checker-a: #2b2a28;
     --checker-b: #34322f;
+    --grid-line: rgba(255,255,255,.16);
     --error: #ff7b72;
     --focus: #79a8ff;
   }
@@ -120,6 +122,22 @@ input.palette { width: 260px; }
 }
 .frame canvas { position: absolute; inset: 15px; width: calc(100% - 30px); height: calc(100% - 30px); object-fit: contain; }
 .frame canvas.pixelated { image-rendering: pixelated; }
+.frame[data-bg=white] { background: #fff; }
+.frame[data-bg=black] { background: #000; }
+.frame.pix { display: flex; overflow: auto; }
+.pixwrap { position: relative; flex: none; margin: auto; }
+.frame .pixwrap canvas { position: static; display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+.pixwrap.grid::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background-image: linear-gradient(to right, var(--grid-line) 1px, transparent 1px), linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  background-size: var(--cell) var(--cell);
+  box-shadow: inset -1px -1px 0 var(--grid-line);
+}
+.frame[data-bg=black] .pixwrap.grid::after { --grid-line: rgba(255,255,255,.22); }
+.frame[data-bg=white] .pixwrap.grid::after { --grid-line: rgba(0,0,0,.18); }
+.view-label { color: var(--muted); font-size: 13px; }
+.tip { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; margin-left: 4px; color: var(--muted); cursor: help; font-size: 13px; border-radius: 50%; vertical-align: -1px; }
+.tip:hover, .tip:focus-visible { color: var(--text); }
 
 .empty {
   flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center;

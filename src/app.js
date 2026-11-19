@@ -1,10 +1,21 @@
 // 도트메이커 화면. 변환·AI는 작업자(worker.js)가 하고, 여기서는 열기·설정·미리보기·저장·설명서만 한다.
 const VERSION = '__VERSION__';  // tools/build.mjs가 package.json의 버전을 넣는다
 const STAGES = {
+  // instruction: 탭 위 한 줄 안내, detail: ⓘ에 마우스를 올리면 보이는 자세한 설명
   dot: { name: '도트화', instruction: '머리와 몸통을 구분해 검은 윤곽과 몸통 경계색을 적용합니다.' },
-  repair: { name: 'AI 보정', instruction: '클라우드 AI(PixelLab·Gemini·OpenAI)에 캐릭터를 보내 도트 그림으로 다시 그립니다. 쓰려면 그 서비스의 내 API 키가 필요합니다.' },
-  lab: { name: '실험', instruction: '베타: 도트 크기와 색 수만 골라 그림을 도트로 바꿉니다. 배경 지우기를 끄면 그림 전체를 배경째 바꿉니다. 다른 탭의 결과에는 영향을 주지 않습니다.' },
+  repair: { name: 'AI 보정', instruction: '클라우드 AI로 캐릭터를 도트 그림으로 다시 그립니다(내 API 키 필요).',
+    detail: '클라우드 AI(PixelLab·Gemini·OpenAI)에 캐릭터를 보내 도트 그림으로 다시 그립니다. 쓰려면 그 서비스의 내 API 키가 필요합니다.' },
+  lab: { name: '실험', instruction: '도트 크기와 색 수만 골라 그림을 도트로 바꿉니다.',
+    detail: '베타: 도트 크기와 색 수만 골라 그림을 도트로 바꿉니다. 배경 지우기를 끄면 그림 전체를 배경째 바꿉니다. 다른 탭의 결과에는 영향을 주지 않습니다.' },
   help: { name: '설명서' },
+};
+
+// 도트화 탭은 방식마다 안내가 다르다(없으면 STAGES.dot).
+const DOT_GUIDES = {
+  faithful: { instruction: '원본의 선 굵기와 명암을 살려 도트로 바꿉니다.',
+    detail: '원본 한 장을 열면 선 굵기와 명암을 살려 투명 PNG 크기에 맞춥니다. 원본에서 바로 격자 칸마다 색을 읽습니다.' },
+  soft: { instruction: '원본 색을 살리고 색 수만 줄여 도트로 바꿉니다.',
+    detail: '원본의 색을 살리고 색 수만 줄여 도트로 바꿉니다. 선은 원본에서 줄기를 찾아 1픽셀로 정리하고, 색은 조금 더 선명하게, 바깥 테두리와 색 면은 깔끔하게 정리합니다. 외곽선·선 추출·경계색은 베리 잉크·2.0 방식·원본 직행에서 씁니다.' },
 };
 
 const store = {
@@ -18,6 +29,14 @@ function savedSettings() {
   for (const key of Object.keys(base)) if (typeof saved[key] === typeof base[key]) base[key] = saved[key];
   return base;
 }
+function savedView() {
+  const v = store.get('view', {}) ?? {};
+  return {
+    zoom: ['fit', 1, 2, 4, 8].includes(v.zoom) ? v.zoom : 'fit',
+    grid: v.grid === true,
+    bg: ['checker', 'white', 'black'].includes(v.bg) ? v.bg : 'checker',
+  };
+}
 const savedSize = () => String(isSize(store.get('size', null)) ? store.get('size', null) : SETTINGS.size.initial);
 
 const state = {
@@ -26,6 +45,7 @@ const state = {
   height: savedSize(),
   settings: savedSettings(),
   compare: false,   // 결과 자리에 원본을 같은 위치·크기로 보여 준다
+  view: savedView(),  // 미리보기 확대·격자·배경
   aligned: null,    // 비교용 원본 그림(결과 칸에 맞춘 것). 그림이나 크기가 바뀌면 다시 만든다
   notice: null,     // 여러 장 저장·복사 결과 안내
   lab: labInitial(),  // 실험 탭(베타) — lab.js
@@ -484,14 +504,54 @@ function preview(title, picture, pixelated, action = null) {
   const head = el('header', {}, el('h3', { textContent: title }), action,
     picture && el('span', { className: 'size', textContent: `${picture.w} × ${picture.h} px` }));
   const frame = el('div', { className: 'frame' });
+  frame.dataset.bg = state.view.bg;
   if (picture) {
     const canvas = toCanvas(picture);
     canvas.className = pixelated ? 'pixelated' : '';
     canvas.setAttribute('role', 'img');
     canvas.setAttribute('aria-label', title);
-    frame.append(canvas);
+    if (pixelated) pixelFrame(frame, canvas, picture);
+    else frame.append(canvas);
   }
   return el('section', { className: 'preview' }, head, frame);
+}
+
+/** 도트 그림 미리보기: 확대(맞춤은 3배 이상이면 칸이 고르게 정수배로)·픽셀 격자. 격자는 한 칸이 4px 이상일 때만 보인다. */
+function pixelFrame(frame, canvas, picture) {
+  const wrap = el('div', { className: 'pixwrap' }, canvas);
+  frame.classList.add('pix');
+  frame.append(wrap);
+  const layout = () => {
+    if (!frame.isConnected) return;
+    let k = state.view.zoom;
+    if (k === 'fit') {
+      const fit = Math.min((frame.clientWidth - 30) / picture.w, (frame.clientHeight - 30) / picture.h);
+      // 3배 이상 키울 수 있으면 정수배로(칸이 고르게), 그보다 작으면 칸을 가득 채운다(너무 작아지지 않게).
+      k = fit >= 3 ? Math.floor(fit) : Math.max(fit, 0.05);
+    }
+    wrap.style.width = `${picture.w * k}px`;
+    wrap.style.height = `${picture.h * k}px`;
+    wrap.style.setProperty('--cell', `${k}px`);
+    wrap.classList.toggle('grid', state.view.grid && k >= 4);
+  };
+  new ResizeObserver(layout).observe(frame);
+}
+
+/** 미리보기 위 '보기' 줄: 확대, 격자, 배경. 고른 값은 다음에 켤 때도 그대로. */
+function viewBar() {
+  const v = state.view, set = (key, value) => { v[key] = value; store.set('view', v); update(); };
+  return row(el('span', { className: 'view-label', textContent: '보기' }),
+    segmented([['fit', '맞춤'], [1, '1×'], [2, '2×'], [4, '4×'], [8, '8×']], v.zoom, z => set('zoom', z), false, '확대'),
+    toggle('격자', v.grid, g => set('grid', g), false, '도트 칸마다 선을 그어 보여 줍니다(한 칸이 4px 이상으로 보일 때). 저장되는 그림에는 들어가지 않습니다.'),
+    labelled('배경', segmented([['checker', '체커'], ['white', '흰색'], ['black', '검정']], v.bg, b => set('bg', b), false, '배경')),
+    tip('맞춤은 칸에 맞게 키웁니다(3배 이상이면 칸이 고르게 정수배로). 1×~8×에서 그림이 칸보다 크면 스크롤해서 봅니다. 보기 설정은 저장되는 그림에 영향을 주지 않습니다.'));
+}
+
+/** ⓘ: 마우스를 올리면(또는 Tab으로 가면) 자세한 설명을 보여 준다. */
+function tip(text) {
+  const node = el('span', { className: 'tip', textContent: 'ⓘ', title: text, tabIndex: 0 });
+  node.setAttribute('aria-label', text);
+  return node;
 }
 
 function segmented(options, value, onPick, disabled = false, label = '') {
@@ -648,7 +708,6 @@ function controls(stage) {
         'MangaLineExtraction으로 원본의 구조선을 읽어, 도트에서 끊기거나 빠진 안쪽 선만 채웁니다. 처음 한 번 모델(약 82MB)을 받습니다.')),
       row(toggle('몸통 경계색', s.boundary, v => setSetting('boundary', v), off || soft),
         stepper(`투명도 ${s.transparency}%`, s.transparency, 0, 100, 5, v => setSetting('transparency', v), off || soft || !s.boundary)),
-      soft && el('p', { className: 'note', textContent: '원본 색 살림: 원본의 색을 살리고 색 수만 줄입니다. 외곽선·선 추출·경계색은 베리 잉크·2.0 방식·원본 직행에서 씁니다.' }),
       finishRow(off),
       jevAutoControls(),
     );
@@ -706,7 +765,7 @@ function inputRow() {
       : state.product ? (correcting() ? '지금 도트화 결과' : '도트화 탭에서 연 이미지의 캐릭터') : '없음 — 이미지를 넣거나 열어 주세요' }),
     el('button', { type: 'button', textContent: '다른 이미지 넣기…', disabled: busy, onclick: () => pickFile((picture, name) => setCloudInput(picture, name)) }),
     c.input && el('button', { type: 'button', textContent: '넣은 그림 빼기', disabled: busy, onclick: () => setCloudInput(null) }),
-    el('span', { className: 'note', textContent: '이 탭에 이미지를 끌어다 놓아도 됩니다' }));
+    tip('이 탭에 이미지를 끌어다 놓거나 붙여넣어도 됩니다.'));
 }
 
 function cloudControls() {
@@ -719,7 +778,7 @@ function cloudControls() {
           : '캐릭터 원본을 보내 지금 크기의 도트 그림으로 새로 그립니다' })),
       c.mode === 'correct'
         ? row(stepper(`다듬기 강도 ${c.fix.toFixed(2)}`, c.fix, 0, 1, 0.05, v => setCloud('fix', Math.round(v * 100) / 100), busy),
-          el('span', { className: 'note', textContent: '낮을수록 잔점·가장자리만, 높을수록 많이 고쳐 그립니다(권장 0.1부터)' }))
+          tip('낮을수록 잔점·가장자리만, 높을수록 많이 고쳐 그립니다(권장 0.1부터).'))
         : row(toggle('원본에 충실하게', c.faithful, v => setCloud('faithful', v), busy, 'PixelLab의 충실 모드(fixer). 끄면 AI가 도트 그림으로 새로 해석합니다.'),
           stepper(`원본 유지 ${c.strength}`, c.strength, 0, 600, 50, v => setCloud('strength', v), busy)))
     : c.provider === 'openai'
@@ -731,12 +790,13 @@ function cloudControls() {
     keyRow(c.provider),
     options,
     // 다듬기에 따로 넣은 그림은 크기 그대로 보내므로 결과 크기를 쓰지 않는다.
-    row(sizeControl(correcting() && Boolean(c.input)), upscaleControl(), el('span', { className: 'note', textContent: '다시 그린 그림을 도트화하기 전에 적용됩니다(받은 그림이 이미 도트 그림이면 쓰지 않음)' })),
+    row(sizeControl(correcting() && Boolean(c.input)), upscaleControl(), tip('AI 업스케일은 다시 그린 그림을 도트화하기 전에 적용됩니다(받은 그림이 이미 도트 그림이면 쓰지 않음).')),
     inputRow(),
     row(el('button', { type: 'button', className: 'primary', textContent: 'AI 보정 실행', disabled: busy || !(state.product || c.input) || !key, onclick: runCloud }),
-      el('span', { className: 'note', textContent: correcting()
-        ? `실행하면 보낼 그림이 ${info.host}로 전송되고 요금이 듭니다(결과에 표시, 내 키 계정에 청구). 키는 이 프로그램에만 저장됩니다.`
-        : `실행하면 보낼 그림이 ${info.host}로 전송되고 1장에 ${info.price} 요금이 듭니다(내 키 계정에 청구). 키는 이 프로그램에만 저장됩니다.` })),
+      el('span', { className: 'note' }, correcting() ? `${info.host}로 전송 · 요금은 내 키 계정에 청구` : `${info.host}로 전송 · 1장에 ${info.price}(내 키 계정에 청구)`,
+        tip(correcting()
+          ? `실행하면 보낼 그림이 ${info.host}로 전송되고 요금이 듭니다(결과에 표시, 내 키 계정에 청구). 키는 이 프로그램에만 저장됩니다.`
+          : `실행하면 보낼 그림이 ${info.host}로 전송되고 1장에 ${info.price} 요금이 듭니다(내 키 계정에 청구). 키는 이 프로그램에만 저장됩니다.`))),
   );
 }
 
@@ -768,12 +828,8 @@ function statusLine(stage) {
 
 function screen(stage) {
   if (stage === 'help') return helpScreen();
-  const instruction = stage === 'dot' && state.settings.method === 'faithful'
-    ? '원본 한 장을 열면 선 굵기와 명암을 살려 투명 PNG 크기에 맞춥니다. 원본에서 바로 격자 칸마다 색을 읽습니다.'
-    : stage === 'dot' && state.settings.method === 'soft'
-    ? '원본의 색을 살리고 색 수만 줄여 도트로 바꿉니다. 선은 원본에서 줄기를 찾아 1픽셀로 정리하고, 색은 조금 더 선명하게, 바깥 테두리와 색 면은 깔끔하게 정리합니다.'
-    : STAGES[stage].instruction;
-  const page = el('div', { className: 'screen' }, el('p', { className: 'muted', textContent: instruction }), controls(stage));
+  const guide = (stage === 'dot' && DOT_GUIDES[state.settings.method]) || STAGES[stage];
+  const page = el('div', { className: 'screen' }, el('p', { className: 'muted guide' }, guide.instruction, guide.detail && tip(guide.detail)), controls(stage));
   if (stage === 'lab' && labSource()) {
     page.append(el('div', { className: 'previews' }, preview('원본', labSource(), false), preview('결과', state.lab.result, true)));
   } else if (stage === 'repair' && (state.product || state.cloud.input)) {
@@ -797,6 +853,8 @@ function screen(stage) {
     page.append(el('button', { type: 'button', className: 'empty drop', onclick: () => $('file').click() },
       el('strong', { textContent: '캐릭터 이미지를 여기에 놓으십시오' }), el('span', { textContent: 'PNG, JPEG, WebP 등 이미지 파일 · 눌러서 고를 수도 있어요' })));
   }
+  const previews = page.querySelector('.previews');
+  if (previews) previews.before(viewBar());
   page.append(statusLine(stage));
   if (state.jev) page.append(jevSheet());
   return page;
@@ -831,6 +889,7 @@ function helpScreen() {
       '<b>PNG 저장…</b>: 지금 탭의 결과를 저장합니다. <kbd>Ctrl</kbd>+<kbd>S</kbd> · 저장 배율(1·2·4·8배)은 번짐 없이 키웁니다.',
       '<b>복사</b>: 지금 탭의 결과를 저장 배율대로 클립보드에 복사합니다. <kbd>Ctrl</kbd>+<kbd>C</kbd>',
       '<b>원본 보기</b>(결과 위 버튼): 결과 자리에 원본을 같은 위치·크기로 보여 줍니다. 눌러 가며 달라진 곳을 비교하세요.',
+      '<b>보기</b>(미리보기 위): 결과를 맞춤·1×~8×로 키워 보고, <b>격자</b>로 도트 칸을 확인하고, 배경을 체커·흰색·검정으로 바꿀 수 있습니다. 저장되는 그림에는 영향이 없습니다. 회색 안내 옆 ⓘ에 마우스를 올리면 자세한 설명이 나옵니다.',
       '결과 크기·도트화 방식·AI 업스케일·체크 항목·저장 배율은 <b>다음에 켤 때도 그대로</b>입니다.',
     ])),
     section('실험 탭 (베타)', list([

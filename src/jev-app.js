@@ -189,7 +189,8 @@ function jevControls() {
       el('button', { type: 'button', textContent: 'JEV 선·색 비교', disabled: busy || off, onclick: compareJev }),
       el('button', { type: 'button', textContent: 'JEV 설정', onclick: () => { state.jev = { settings: true }; update(); } }),
       state.jevApplied && el('button', { type: 'button', textContent: '적용 전으로', disabled: busy, onclick: undoJev })),
-    el('p', { className: 'note', textContent: 'JEV를 실행하면 배경을 분리한 원본과 후보 그림을 LLM Gateway로 보냅니다(내 API 키 계정에 청구).' }));
+    el('p', { className: 'note' }, 'JEV: 그림을 LLM Gateway로 보냄 · 내 키 계정에 청구',
+      tip('JEV를 실행하면 배경을 분리한 원본과 후보 그림을 LLM Gateway로 보냅니다(내 API 키 계정에 청구).')));
 }
 
 // ── 원본과 후보를 한 요청에 나란히 보여 주고 하나를 고르게 한다(맥판 JevColors.choose와 같은 질문).

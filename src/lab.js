@@ -362,17 +362,17 @@ function labControls() {
     row(labelled('결과 크기', size),
       stepper(`도트 크기 ${lab.block}px`, lab.block, 1, 32, 1, v => setLab('block', v), off || Boolean(lab.size)),
       labelled('색 뽑는 방식', segmented([['auto', '자동 추출'], ['custom', '커스텀 팔레트']], lab.mode, v => setLab('mode', v), off, '색 뽑는 방식')),
+      tip(lab.mode === 'custom'
+        ? '커스텀 팔레트: 정해 둔 색만 씁니다. 색 칸을 눌러 바꾸세요. 여러 그림의 색감을 맞추거나 옛 게임 느낌을 낼 때 좋고, 원본과 색이 많이 달라질 수 있습니다.'
+        : '자동 추출: 그림에 쓰인 색과 가장 가까운 색을 골라 원본 색감을 유지합니다. 도트 크기는 원본 몇 픽셀을 한 칸으로 묶을지입니다(클수록 칸이 굵어짐). 결과 크기를 고르면 도트 크기 대신 긴 변을 그 칸 수에 맞춥니다.'),
       labelled('팔레트 색 수', count)),
     row(labelled('줄이는 방식', segmented([['average', '평균'], ['vote', '투표']], lab.method, v => setLab('method', v), off, '줄이는 방식')),
       lab.method === 'vote' && toggle('작은 디테일 지키기', lab.protect, v => setLab('protect', v), off,
         '칸보다 가는 선이나 눈 하이라이트처럼 작고 둘레와 밝기가 뚜렷이 다른 부분이 투표에서 져서 사라지지 않게 합니다.'),
       lab.method === 'vote' && toggle('외곽선 틈 메우기', lab.repair, v => setLab('repair', v), off,
         '배경을 지운 그림에서, 어두운 바깥 외곽선이 한 칸만 밝게 끊긴 곳을 옆 외곽선 색으로 메웁니다. 어두운 외곽선이 없는 그림은 건드리지 않습니다.'),
-      el('span', { className: 'note', textContent: lab.method === 'vote'
+      tip(lab.method === 'vote'
         ? '투표: 칸마다 가장 넓은 색 영역을 고르고, 색은 그 영역의 원본 색으로 칠합니다. 경계가 탁해지지 않습니다.'
-        : '평균: 칸 안의 색을 섞습니다. 부드럽지만 경계가 탁해질 수 있습니다.' })),
-    swatches && row(swatches, el('button', { type: 'button', textContent: '기본 색으로', onclick: () => setLab('palette', labDefaultPalette()) })),
-    el('p', { className: 'note', textContent: lab.mode === 'custom'
-      ? '커스텀 팔레트: 정해 둔 색만 씁니다. 색 칸을 눌러 바꾸세요. 여러 그림의 색감을 맞추거나 옛 게임 느낌을 낼 때 좋고, 원본과 색이 많이 달라질 수 있습니다.'
-      : '자동 추출: 그림에 쓰인 색과 가장 가까운 색을 골라 원본 색감을 유지합니다. 도트 크기는 원본 몇 픽셀을 한 칸으로 묶을지입니다(클수록 칸이 굵어짐). 결과 크기를 고르면 도트 크기 대신 긴 변을 그 칸 수에 맞춥니다.' }));
+        : '평균: 칸 안의 색을 섞습니다. 부드럽지만 경계가 탁해질 수 있습니다.')),
+    swatches && row(swatches, el('button', { type: 'button', textContent: '기본 색으로', onclick: () => setLab('palette', labDefaultPalette()) })));
 }
