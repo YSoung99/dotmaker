@@ -64,7 +64,8 @@ ipcMain.handle('batch:write', (_event, name, png) => {
 // '지금 업데이트'를 고르면 뒤에서 받고, 다 받으면 설치 창 없이 바로 설치한 뒤 다시 켠다.
 // 윈도우 설치판·리눅스 AppImage·deb는 electron-updater, 맥은 서명 없는 앱이라 mac-updater.cjs가 직접 바꾼다.
 // 그 밖(리눅스에서 압축을 풀어 켠 경우 등)은 화면 위쪽 받기 링크를 쓴다.
-const RELEASES = (() => { const { owner, repo } = require('../package.json').build.publish; return { owner, repo, page: `https://github.com/${owner}/${repo}/releases/latest` }; })();
+// 설치 파일 안의 package.json에는 build 항목이 빠지므로 여기 직접 적는다(package.json의 build.publish와 같게).
+const RELEASES = { owner: 'YSoung99', repo: 'dotmaker', page: 'https://github.com/YSoung99/dotmaker/releases/latest' };
 function linuxPackage() {
   if (process.env.APPIMAGE) return 'appimage';
   try { return fs.readFileSync(path.join(process.resourcesPath, 'package-type'), 'utf8').trim(); } catch { return null; }
@@ -78,7 +79,12 @@ let manualCheck = false;   // 사용자가 직접 '업데이트 확인'을 눌�
 function mainWindow() { return BrowserWindow.getAllWindows()[0] ?? null; }
 function ask(options) { const window = mainWindow(); return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options); }
 
+// 업데이트 준비가 어떤 이유로 실패해도 프로그램은 켜져야 한다.
 function setupUpdater() {
+  try { startUpdater(); } catch (error) { console.error('업데이트 준비 실패:', error); updater = null; }
+}
+
+function startUpdater() {
   if (!canAutoUpdate()) return;
   if (process.platform === 'darwin') {
     const { MacUpdater } = require('./mac-updater.cjs');
