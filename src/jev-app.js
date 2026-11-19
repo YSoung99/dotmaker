@@ -267,6 +267,7 @@ function autoJev() {
     state.busy = 'JEV가 도트화 후보를 나란히 비교 중'; update();
     const verdict = await chooseJev(state.original, rendered.results.map(r => r.dotted), 'overall');
     const chosen = list[verdict.index], result = rendered.results[verdict.index];
+    rememberSettings('dot');
     state.settings = chosen;
     store.set('settings', chosen);
     submittedSettings = { ...chosen };

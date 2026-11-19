@@ -71,31 +71,38 @@ chmod +x DotMaker-*-linux-x86_64.AppImage
 | 고정 팔레트 목록 추가 | `src/core.js`의 `PALETTES` |
 | 프로그램 버전 | [`package.json`](package.json)의 `"version"` (화면과 설치 파일 이름에 자동 반영) |
 | 화면(버튼·문구·설명서) | `src/app.js`, `src/app.html` |
-| 실험 탭(베타) | `src/lab.js` |
+| 실험 탭(베타) | 화면 `src/lab.js`, 계산 `src/lab-core.js`, 메이플 램프 `src/maple.js` |
 | 도트화 계산 | `src/core.js` |
 | AI(업스케일·배경 분리·선 추출) | `src/ai.js`, `src/worker.js` |
 | AI 보정(클라우드)·JEV | `src/cloud.js`, `src/jev-app.js`, `src/jev-core.js` |
-| 프로그램 창·키 저장·업데이트 | `desktop/main.cjs` |
+| 프로그램 창·키 저장(JEV·클라우드 AI 키)·업데이트 | `desktop/main.cjs`, `desktop/preload.cjs`, `desktop/mac-updater.cjs`(맥) |
 | 프로그램 안 업데이트가 보는 저장소 | [`package.json`](package.json)의 `build.publish` |
+| 테스트(결과 그림 스냅샷) | `test/` |
 
 Node.js 18 이상이 필요합니다.
 
 ```bash
 npm install        # 처음 한 번
 npm start          # 고친 내용을 바로 실행해 보기
+npm test           # 도트 계산 결과가 그대로인지 확인(작은 합성 그림의 결과 해시 비교)
 npm run dist       # 설치 파일 만들기: release/ 에 윈도우 .exe, 맥 .dmg, 리눅스 .deb·.AppImage (맥에서 실행)
 ```
 
-`npm run dist:win`, `npm run dist:mac`, `npm run dist:linux`로 한쪽만 만들 수도 있습니다. `dist/`와 `release/`는 만들어지는 파일이라 저장소에 올리지 않습니다.
+`npm run dist:win`, `npm run dist:mac`, `npm run dist:linux`로 한쪽만 만들 수도 있습니다. 계산을 일부러 바꿨으면 `UPDATE_SNAPSHOTS=1 npm test`로 새 결과를 기록합니다.
 
-**릴리스 만들기**: `package.json` 버전을 올리고 README 업데이트 기록에 그 버전 줄을 쓴 뒤, `git tag v3.10.0 && git push origin v3.10.0`처럼 v+버전 태그를 올리면 깃허브가 윈도우·맥·리눅스 설치 파일을 각각 만들어 릴리스로 올립니다([`.github/workflows/release.yml`](.github/workflows/release.yml)). 프로그램 안 업데이트에 필요한 `latest*.yml`·`*.blockmap`·맥 `.zip`도 함께 올라가고, 릴리스 설명은 README의 그 버전 줄을 씁니다.
+GitHub Actions: PR·푸시마다 빌드와 테스트를 돌리고, `v3.11.0`처럼 `v`로 시작하는 태그를 푸시하면 윈도우·맥·리눅스 설치 파일을 각 OS에서 만들어 그 태그의 릴리스에 올립니다(릴리스가 없으면 초안으로 만들어지니, 설치 안내를 적고 공개하세요). 태그와 `package.json` 버전이 다르면 멈춥니다. `dist/`와 `release/`는 만들어지는 파일이라 저장소에 올리지 않습니다.
+
+**릴리스 만들기**: `package.json` 버전을 올리고 README 업데이트 기록에 그 버전 줄을 쓴 뒤, `git tag v3.11.0 && git push origin v3.11.0`처럼 v+버전 태그를 올리면 깃허브가 윈도우·맥·리눅스 설치 파일을 각각 만들어 릴리스로 올립니다([`.github/workflows/release.yml`](.github/workflows/release.yml)). 프로그램 안 업데이트에 필요한 `latest*.yml`·`*.blockmap`·맥 `.zip`도 함께 올라가고, 릴리스 설명은 README의 그 버전 줄을 씁니다.
 
 윈도우 설치 파일을 맥·리눅스에서 만들 때는 `wine`이 있어야 합니다(프로그램 아이콘·버전 정보를 넣는 데 씀).
 
 AI 업스케일 모델(ONNX)은 [models-esrgan 릴리스](https://github.com/YSoung99/dotmaker/releases/tag/models-esrgan)에 있고, [dotmaker-mac의 scripts/export-esrgan.py](https://github.com/YSoung99/dotmaker-mac/blob/main/scripts/export-esrgan.py)로 공식 가중치에서 다시 만들 수 있습니다.
 
+선 추출 AI 구조(`src/lines-graph.onnx`)와 가중치 목록(`src/lines-manifest.json`)은 [`tools/export-lines.py`](tools/export-lines.py)로 다시 만듭니다. torch 2.15.0 · transformers 4.57.6 · onnx 1.23.2가 있는 파이썬에서 `python3 tools/export-lines.py`를 실행하면 허깅페이스 원본 모델을 받아 두 파일을 덮어씁니다(이 판들이면 지금 파일과 바이트까지 같음, transformers 5.x는 안 됨).
+
 ## 📝 업데이트 기록
 
+- **3.11.0**: 실험 탭에 새 방식 **메이플 램프**를 넣었습니다. 비슷한 색을 재질로 묶고 재질마다 밝기 단계와 색 있는 윤곽선을 만들어, 게임 스킨처럼 명암과 색이 살아납니다(재질 수·음영 단계·윤곽선 스타일·휴 시프트·재질 경계선). 실험 탭 계산을 뒤에서 하도록 바꿔 **설정을 바꿀 때 창이 멈추지 않습니다**. 실험 탭에 **여러 장**을 넣으면 실험 탭 설정으로 한꺼번에 바꿔 폴더에 저장합니다. 도트화·실험 탭에서 **Ctrl/⌘+Z로 설정 되돌리기**, Ctrl/⌘+Shift+Z로 다시 하기가 됩니다. AI 보정의 OpenAI는 **Flare(빠름)·Sunburst(정밀)** 모델과 **품질 낮음·보통·높음**을 고를 수 있고, 이번 요금을 결과에 표시합니다. 보안: 클라우드 AI 키(PixelLab·Gemini·OpenAI)를 **운영체제 암호화 저장소**에 보관하고(예전 키는 처음 실행할 때 자동으로 옮김), AI 파일은 받거나 넣을 때 **내용까지 원본과 같은지 확인**합니다. '분리 없이 그대로 변환' 뒤 AI 업스케일을 바꾸면 배경 분리를 다시 하던 문제를 고쳤습니다.
 - **3.10.0**: **프로그램 안에서 업데이트**. 켤 때 새 버전이 있으면 지금 업데이트할지 묻고, 고르면 받아서 바로 설치한 뒤 다시 켭니다(윈도우는 설치 창 없이, 맥·리눅스 AppImage·deb 모두 지원). 위쪽에 **업데이트 확인** 버튼을 넣었습니다. **결과 크기를 1px 단위로** 고를 수 있습니다. 드롭다운(10px 단위) 옆 칸에 숫자를 직접 넣거나 ▲▼로 1씩 바꿉니다. 미리보기 위 **보기** 줄에서 결과를 맞춤·1×~8×로 키우고, **격자**로 도트 칸을 확인하고, 배경(체커·흰색·검정)을 바꿀 수 있습니다. 긴 안내문은 한 줄로 줄이고 자세한 설명은 ⓘ로 옮겼습니다. 이번 버전은 한 번 직접 설치해야 하고, 그다음부터는 프로그램 안에서 업데이트됩니다.
 - **3.9.3**: 실험 탭에 새 도트 방식 **투표**를 넣었습니다(줄이는 방식에서 고름). 칸마다 가장 넓은 색 영역을 고르고 그 영역의 원본 색으로 칠해, 작은 크기에서도 선이 또렷합니다. 가는 선을 지키는 **작은 디테일 지키기**, 끊긴 바깥선을 잇는 **외곽선 틈 메우기**도 함께 넣었습니다. 리눅스에서 프로그램 아이콘이 보이지 않던 문제를 고쳤습니다.
 - **3.9.2**: **리눅스판 추가**(우분투·데비안용 `.deb`, 그 밖의 배포판용 `.AppImage`). 기능과 설정은 맥·윈도우와 같습니다. 실험 탭에 **배경 지우기**(기본 켬)를 넣었습니다. 끄면 예전처럼 그림 전체를 배경째 바꿉니다. 프로그램 **아이콘을 새로** 바꿨습니다(왼쪽은 원본, 오른쪽은 도트).

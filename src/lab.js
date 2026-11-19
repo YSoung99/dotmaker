@@ -1,17 +1,16 @@
 // 실험 탭(베타): 그림을 도트 크기·색 수만 골라 도트로 바꾼다. 배경 지우기를 끄면 그림 전체를 배경째 바꾼다.
 // 도트 크기(원본 몇 픽셀을 한 칸으로) 또는 결과 크기(긴 변 칸 수)와 색 뽑는 방식(자동 N색 / 커스텀 팔레트)만 고른다.
-// 계산이 가벼워 화면에서 바로 한다(배경 지우기만 작업자에게 맡긴다). 다른 탭의 결과에는 영향을 주지 않는다.
+// 계산(lab-core.js)은 작업자가 하고, 화면은 설정·결과 표시만 한다. 다른 탭의 결과에는 영향을 주지 않는다.
 
 // 커스텀 팔레트 기본 16색: 옛 PC 느낌의 디지털 RGB 16색(앞 8개는 밝은 8색이라 8색만 써도 흰색·원색이 있다).
 // 17번째부터는 4단계 RGB 조합으로 채운다.
 const LAB_BASE16 = ['000000', '0000ff', 'ff0000', 'ff00ff', '00ff00', '00ffff', 'ffff00', 'ffffff',
   '808080', '000080', '800000', '800080', '008000', '008080', '808000', 'c0c0c0'];
 const LAB_COUNTS = { auto: [8, 16, 32, 64, 256], custom: [8, 16, 32, 64] };
-const LAB_MAX_SIDE = 512;
-// 투표 방식: 칸이 어느 색 영역인지 정할 때만 쓰는 색 수, 그리고 '작은 디테일'로 볼 기준
-const LAB_VOTE_COLORS = 32;
-const LAB_DETAIL = { contrast: 56, share: 0.15 };   // 둘레 색과의 밝기 차(0~255), 칸에서 차지하는 최소 넓이 비율
-const LAB_OUTLINE_DARK = 90;                        // 이보다 어두운 가장자리 칸을 외곽선으로 본다(밝기 0~255)
+// 저장하고 되돌리기(설정 히스토리)에 쓰는 설정 이름
+const LAB_KEYS = ['block', 'size', 'cutout', 'method', 'protect', 'repair', 'mode', 'count', 'palette',
+  'mapleMaterials', 'mapleTones', 'mapleOutline', 'mapleHueShift', 'mapleBoundary'];
+const LAB_OUTLINES = [['ink', '진한 잉크'], ['material', '재질 색'], ['none', '없음']];
 
 function labDefaultPalette() {
   const colors = [...LAB_BASE16], levels = ['00', '55', 'aa', 'ff'];
@@ -24,7 +23,8 @@ function labDefaultPalette() {
 function labInitial() {
   const saved = store.get('lab.palette', null);
   const mode = store.get('lab.mode', 'auto') === 'custom' ? 'custom' : 'auto';
-  const count = store.get('lab.count', 16), size = store.get('lab.size', 0);
+  const count = store.get('lab.count', 16), size = store.get('lab.size', 0), method = store.get('lab.method', 'average');
+  const between = (key, min, max, fallback) => Math.min(max, Math.max(min, Number(store.get(key, fallback)) || fallback));
   return {
     input: null,     // 이 탭에 따로 넣은 그림 { name, picture } — 없으면 도트화 탭에서 연 원본을 쓴다
     block: Math.min(32, Math.max(1, Number(store.get('lab.block', 4)) || 4)),
@@ -32,13 +32,19 @@ function labInitial() {
     cutout: store.get('lab.cutout', true) !== false,  // 배경 지우기(기본 켬)
     cut: null,       // 배경을 지운 그림 { from: 바꿀 그림, picture } — 못 지웠으면 picture가 null
     cutting: null,   // 지금 배경을 지우고 있는 그림
-    method: store.get('lab.method', 'average') === 'vote' ? 'vote' : 'average',   // 줄이는 방식: 평균 / 투표
+    method: ['vote', 'maple'].includes(method) ? method : 'average',   // 줄이는 방식: 평균 / 투표 / 메이플 램프
     protect: store.get('lab.protect', true) !== false,   // 투표: 작은 디테일 지키기
     repair: store.get('lab.repair', true) !== false,     // 투표: 외곽선 틈 메우기
+    mapleMaterials: between('lab.mapleMaterials', 2, 16, 8),   // 메이플 램프: 재질 수
+    mapleTones: between('lab.mapleTones', 2, 5, 3),            // 메이플 램프: 재질마다 음영 단계
+    mapleOutline: LAB_OUTLINES.some(([v]) => v === store.get('lab.mapleOutline', 'ink')) ? store.get('lab.mapleOutline', 'ink') : 'ink',
+    mapleHueShift: store.get('lab.mapleHueShift', true) !== false,
+    mapleBoundary: store.get('lab.mapleBoundary', true) !== false,
     mode,
     count: LAB_COUNTS[mode].includes(count) ? count : 16,
     palette: Array.isArray(saved) && saved.length === 64 && saved.every(c => /^[0-9a-f]{6}$/.test(c)) ? saved : labDefaultPalette(),
     result: null,    // { w, h, bytes }
+    running: null,   // 작업자에게 맡긴 계산 표(설정이 바뀌면 지난 결과는 버린다)
     status: '',
   };
 }
@@ -47,17 +53,24 @@ const labSource = () => state.lab.input?.picture ?? state.original;
 
 function setLab(key, value) {
   const lab = state.lab;
+  rememberSettings('lab');
   lab[key] = value;
   if (key === 'mode' && !LAB_COUNTS[value].includes(lab.count)) lab.count = 64;
-  for (const k of ['block', 'size', 'cutout', 'method', 'protect', 'repair', 'mode', 'count', 'palette']) store.set('lab.' + k, lab[k]);
-  lab.result = null;
+  for (const k of LAB_KEYS) store.set('lab.' + k, lab[k]);
+  labReset();
   state.notice = null;
   update();
 }
 
+/** 결과를 비워 다음 그리기 때 다시 계산하게 한다. 아직 계산 중인 지난 결과는 받아도 버린다. */
+function labReset() {
+  state.lab.result = null;
+  state.lab.running = null;
+}
+
 function setLabInput(picture, name) {
   state.lab.input = picture ? { picture, name } : null;
-  state.lab.result = null;
+  labReset();
   update();
 }
 
@@ -67,6 +80,13 @@ async function labCutout(raw) {
   if (lab.cutting === raw) return;
   lab.cutting = raw;
   await null;   // 화면을 그리는 도중에 불리므로, 그리기가 끝난 뒤에 요청한다
+  lab.cut = { from: raw, picture: await labCutoutPicture(raw, '배경 지우는 중') };
+  if (lab.cutting === raw) lab.cutting = null;
+  update();
+}
+
+/** 작업자에게 배경을 지운 그림을 받는다. 못 지우면 null(오류 문구는 띄우지 않는다). */
+async function labCutoutPicture(raw, label) {
   const data = new Uint8Array(raw.bytes.length);
   for (let i = 0; i < data.length; i += 4) {
     const a = raw.bytes[i + 3];
@@ -76,267 +96,88 @@ async function labCutout(raw) {
     data[i + 3] = a;
   }
   try {
-    const { subject } = await engine.request('cutout', { image: { w: raw.w, h: raw.h, data } }, '배경 지우는 중');
-    lab.cut = { from: raw, picture: subject };
+    return (await engine.request('cutout', { image: { w: raw.w, h: raw.h, data } }, label)).subject;
   } catch {
-    lab.cut = { from: raw, picture: null };
     state.error = null;
+    return null;
   }
-  if (lab.cutting === raw) lab.cutting = null;
+}
+
+
+/** 커스텀 팔레트(16진수 글자)를 [r, g, b] 목록으로 */
+const labPaletteRGB = lab => lab.palette.slice(0, lab.count)
+  .map(hex => [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)]);
+
+/** 작업자에 넘길 실험 탭 설정. 결과 크기를 골랐으면 긴 변이 그 칸 수가 되게 묶는다(원본이 더 작으면 원본 크기 그대로). */
+function labOptions(source) {
+  const lab = state.lab, maple = lab.method === 'maple';
+  return { wanted: lab.size ? Math.max(1, Math.max(source.w, source.h) / lab.size) : lab.block,
+    method: lab.method, protect: lab.protect, repair: lab.repair, count: lab.count,
+    palette: lab.mode === 'custom' && !maple ? labPaletteRGB(lab) : null,
+    maple: { materials: lab.mapleMaterials, tones: lab.mapleTones, outline: lab.mapleOutline, hueShift: lab.mapleHueShift, boundary: lab.mapleBoundary } };
+}
+
+/** 여러 장: 지금 실험 탭 설정(배경 지우기 포함)으로 모두 바꿔 고른 폴더에 저장 배율대로 저장한다. 이 탭의 그림·결과는 그대로 둔다. */
+async function labBatch(files) {
+  if (state.busy) return;
+  const folder = await desktop?.pickFolder?.();
+  if (!folder) return;
+  const scale = state.exportScale, cutout = state.lab.cutout, failed = [];
+  let saved = 0;
+  state.notice = null;
+  for (const [k, file] of files.entries()) {
+    const label = `실험 탭 여러 장 변환 중 (${k + 1}/${files.length}) · ${file.name}`;
+    try {
+      state.busy = label; state.error = null; update();
+      const raw = await loadPictureFile(file);
+      const source = (cutout && await labCutoutPicture(raw, label)) || raw;
+      // 설정은 그림마다 그때 값으로(결과 크기는 그림 크기에 따라 달라진다). 'labBatch'는 화면의 실험 탭 계산에 밀려 버려지지 않는다.
+      const done = await engine.request('labBatch', { source, options: labOptions(source) }, label);
+      const picture = scaled({ w: done.w, h: done.h, bytes: done.bytes }, scale);
+      const blob = await new Promise(resolve => toCanvas(picture).toBlob(resolve, 'image/png'));
+      await desktop.writeToFolder(outputName(file.name, 'lab', done, scale), new Uint8Array(await blob.arrayBuffer()));
+      saved++;
+    } catch (error) {
+      console.error(error);
+      failed.push(file.name);
+    }
+  }
+  state.busy = null;
+  state.error = null;
+  state.notice = `실험 탭 여러 장 변환: ${saved}장을 '${folder}' 폴더에 저장했습니다` + (failed.length ? ` · 실패 ${failed.length}장 (${failed.join(', ')})` : '');
   update();
 }
 
-/** 원본을 wanted×wanted 픽셀씩 평균 내 한 칸으로 줄인다. 절반 넘게 투명한 칸은 투명. */
-function labShrink(source, wanted) {
-  const scale = Math.max(wanted, Math.max(source.w, source.h) / LAB_MAX_SIDE);
-  const w = Math.max(1, Math.round(source.w / scale)), h = Math.max(1, Math.round(source.h / scale));
-  const out = new Uint8ClampedArray(w * h * 4), src = source.bytes;
-  for (let y = 0; y < h; y++) {
-    const y0 = Math.floor(y * source.h / h), y1 = Math.max(y0 + 1, Math.floor((y + 1) * source.h / h));
-    for (let x = 0; x < w; x++) {
-      const x0 = Math.floor(x * source.w / w), x1 = Math.max(x0 + 1, Math.floor((x + 1) * source.w / w));
-      let r = 0, g = 0, b = 0, a = 0;
-      for (let v = y0; v < y1; v++) for (let u = x0; u < x1; u++) {
-        const i = (v * source.w + u) * 4, alpha = src[i + 3];
-        r += src[i] * alpha; g += src[i + 1] * alpha; b += src[i + 2] * alpha; a += alpha;
-      }
-      const o = (y * w + x) * 4, area = (y1 - y0) * (x1 - x0);
-      if (a < area * 128) continue;
-      out[o] = Math.round(r / a); out[o + 1] = Math.round(g / a); out[o + 2] = Math.round(b / a); out[o + 3] = 255;
-    }
-  }
-  return { w, h, bytes: out, scale };
-}
-
-/**
- * 투표 방식(두 단계): 칸의 '모양'과 '색'을 따로 정한다.
- * 1) 그림을 몇십 색으로 단순화한 라벨로, 칸마다 어느 색 영역이 이기는지 투표한다(가운데에 가까울수록 표가 큼).
- *    섞인 중간색이 아니라 또렷한 라벨끼리 겨루므로 영역 경계가 탁해지지 않는다.
- * 2) 칸 색은 이긴 라벨을 가진 원본 픽셀만 평균 낸다. 단순화한 색이 아니라 원본의 실제 색이 나온다.
- * protect: 칸보다 가는 선·작은 하이라이트는 투표에서 지므로, 둘레와 밝기가 뚜렷이 다르고
- *          옆 칸보다 그 색이 많이 지나가는(줄기) 칸이면 그 색을 고른다.
- */
-function labVote(source, wanted, protect) {
-  const scale = Math.max(wanted, Math.max(source.w, source.h) / LAB_MAX_SIDE);
-  const w = Math.max(1, Math.round(source.w / scale)), h = Math.max(1, Math.round(source.h / scale));
-  const src = source.bytes, palette = labAutoPalette(source, LAB_VOTE_COLORS), K = palette.length;
-  const luma = palette.map(c => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]);
-  const nearest = new Int16Array(32768).fill(-1);
-  const labelAt = i => {
-    const key = ((src[i] >> 3) << 10) | ((src[i + 1] >> 3) << 5) | (src[i + 2] >> 3);
-    if (nearest[key] < 0) nearest[key] = labNearest(src[i], src[i + 1], src[i + 2], palette);
-    return nearest[key];
-  };
-  const spans = (n, size) => Array.from({ length: n }, (_, k) => { const a = Math.floor(k * size / n); return [a, Math.max(a + 1, Math.floor((k + 1) * size / n))]; });
-  const xs = spans(w, source.w), ys = spans(h, source.h);
-  // 가운데에 가까운 픽셀일수록 큰 표(가장자리는 1/4)
-  const weight = (u, [a, b]) => 0.25 + 0.75 * (1 - Math.abs(u + 0.5 - (a + b) / 2) / ((b - a) / 2));
-  const each = (x, y, visit) => {
-    for (let v = ys[y][0]; v < ys[y][1]; v++) for (let u = xs[x][0]; u < xs[x][1]; u++) {
-      const i = (v * source.w + u) * 4;
-      if (src[i + 3] > 0) visit(i, src[i + 3] / 255, weight(u, xs[x]) * weight(v, ys[y]));
-    }
-  };
-  // 칸마다 라벨별 넓이(area)와 표(votes). 절반 넘게 투명한 칸은 투명(-1).
-  const area = new Float32Array(w * h * K), votes = new Float32Array(w * h * K), filled = new Float32Array(w * h), chosen = new Int16Array(w * h).fill(-1);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const c = y * w + x, base = c * K;
-    each(x, y, (i, alpha, centre) => { const l = labelAt(i); area[base + l] += alpha; votes[base + l] += alpha * centre; filled[c] += alpha; });
-    if (filled[c] < (ys[y][1] - ys[y][0]) * (xs[x][1] - xs[x][0]) * 0.5) continue;
-    let best = 0;
-    for (let l = 1; l < K; l++) if (votes[base + l] > votes[base + best]) best = l;
-    chosen[c] = best;
-  }
-  let kept = 0;
-  if (protect) {
-    const picked = chosen.slice();
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      const c = y * w + x;
-      if (picked[c] < 0) continue;
-      // 둘레(3×3칸)에서 가장 넓은 색이 이 자리의 바탕색
-      let ground = 0, most = -1;
-      for (let l = 0; l < K; l++) {
-        let sum = 0;
-        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-          const nx = x + dx, ny = y + dy;
-          if (nx >= 0 && ny >= 0 && nx < w && ny < h) sum += area[(ny * w + nx) * K + l];
-        }
-        if (sum > most) { most = sum; ground = l; }
-      }
-      // 바탕보다 뚜렷이 어두운 색들(선)·밝은 색들(하이라이트)이 이 칸과 옆 칸에서 차지하는 비율
-      for (const side of [-1, 1]) {
-        const member = l => (luma[l] - luma[ground]) * side >= LAB_DETAIL.contrast;
-        const share = (nx, ny) => {
-          if (nx < 0 || ny < 0 || nx >= w || ny >= h || filled[ny * w + nx] === 0) return 0;
-          let sum = 0;
-          for (let l = 0; l < K; l++) if (member(l)) sum += area[(ny * w + nx) * K + l];
-          return sum / filled[ny * w + nx];
-        };
-        const here = share(x, y);
-        if (here < LAB_DETAIL.share) continue;
-        // 절반을 넘거나, 양옆(또는 위아래)보다 많은 줄기 칸이면 디테일로 본다(영역의 가장자리는 한쪽이 더 많아 해당 없음)
-        const ridge = (share(x - 1, y) < here && share(x + 1, y) <= here) || (share(x, y - 1) < here && share(x, y + 1) <= here);
-        if (here <= 0.5 && !ridge) continue;
-        let best = -1;
-        for (let l = 0; l < K; l++) if (member(l) && (best < 0 || area[c * K + l] > area[c * K + best])) best = l;
-        if (best >= 0 && area[c * K + best] > 0 && best !== picked[c]) { chosen[c] = best; kept++; }
-        break;
-      }
-    }
-  }
-  // 색: 이긴 라벨을 가진 원본 픽셀의 평균(가운데 가중)
-  const out = new Uint8ClampedArray(w * h * 4);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const c = y * w + x;
-    if (chosen[c] < 0) continue;
-    let r = 0, g = 0, b = 0, n = 0;
-    each(x, y, (i, alpha, centre) => { if (labelAt(i) === chosen[c]) { const t = alpha * centre; r += src[i] * t; g += src[i + 1] * t; b += src[i + 2] * t; n += t; } });
-    out[c * 4] = Math.round(r / n); out[c * 4 + 1] = Math.round(g / n); out[c * 4 + 2] = Math.round(b / n); out[c * 4 + 3] = 255;
-  }
-  return { w, h, bytes: out, scale, kept };
-}
-
-/**
- * 외곽선 틈 메우기: 투명 배경과 맞닿은 가장자리 칸이 대부분 어두운 외곽선인 덩어리에서,
- * 외곽선 사이에 한 칸만 밝게 끊긴 곳을 옆 외곽선 색으로 메운다. 메운 칸 수를 돌려준다.
- * 덩어리(이어진 칸 묶음)마다 따로 본다: 흰 테두리 장식처럼 가장자리가 밝은 덩어리는 건드리지 않는다.
- */
-function labRepairOutline(picture) {
-  const { w, h, bytes: px } = picture;
-  const solid = (x, y) => x >= 0 && y >= 0 && x < w && y < h && px[(y * w + x) * 4 + 3] > 0;
-  if (!px.some((v, i) => i % 4 === 3 && v === 0)) return 0;
-  const luma = i => 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
-  const edge = new Uint8Array(w * h);   // 1: 밝은 가장자리 칸, 2: 어두운 가장자리 칸(외곽선)
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    if (!solid(x, y) || (solid(x - 1, y) && solid(x + 1, y) && solid(x, y - 1) && solid(x, y + 1))) continue;
-    edge[y * w + x] = luma(y * w + x) < LAB_OUTLINE_DARK ? 2 : 1;
-  }
-  // 이어진 덩어리마다 가장자리의 60% 이상이 어두울 때만 그 덩어리의 틈을 메운다
-  const seen = new Uint8Array(w * h), fixes = [];
-  for (let start = 0; start < w * h; start++) {
-    if (seen[start] || px[start * 4 + 3] === 0) continue;
-    const cells = [start];
-    seen[start] = 1;
-    for (let k = 0; k < cells.length; k++) {
-      const x = cells[k] % w, y = (cells[k] / w) | 0;
-      for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) {
-        if (solid(nx, ny) && !seen[ny * w + nx]) { seen[ny * w + nx] = 1; cells.push(ny * w + nx); }
-      }
-    }
-    const light = cells.filter(c => edge[c] === 1), dark = cells.filter(c => edge[c] === 2).length;
-    if (dark < (dark + light.length) * 0.6) continue;
-    for (const c of light) {
-      const x = c % w, y = (c / w) | 0, near = [];
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-        const nx = x + dx, ny = y + dy;
-        if ((dx || dy) && nx >= 0 && ny >= 0 && nx < w && ny < h && edge[ny * w + nx] === 2) near.push([nx, ny]);
-      }
-      // 서로 붙어 있지 않은 외곽선 칸 둘 사이에 낀 칸만 틈으로 본다.
-      // 뒤(안쪽)에 밝은 면이 이어져 있을 때만 메운다: 리본 끝·흰 테두리처럼 한 칸 굵기인 밝은 부분은 메우면 사라지므로 둔다.
-      const pair = near.find(([ax, ay]) => near.some(([bx, by]) => Math.abs(ax - bx) > 1 || Math.abs(ay - by) > 1));
-      const backed = [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]].some(([nx, ny]) => solid(nx, ny) && edge[ny * w + nx] === 0 && luma(ny * w + nx) >= LAB_OUTLINE_DARK);
-      if (pair && backed) fixes.push([c, pair[1] * w + pair[0]]);
-    }
-  }
-  for (const [to, from] of fixes) { px[to * 4] = px[from * 4]; px[to * 4 + 1] = px[from * 4 + 1]; px[to * 4 + 2] = px[from * 4 + 2]; }
-  return fixes.length;
-}
-
-/** 자동 추출: 그림에 쓰인 색을 가장 잘 대표하는 count색을 고른다(분산이 큰 쪽부터 나눈 뒤 몇 번 다듬기). */
-function labAutoPalette(picture, count) {
-  const bins = new Map(), px = picture.bytes;
-  for (let i = 0; i < px.length; i += 4) {
-    if (px[i + 3] === 0) continue;
-    const key = ((px[i] >> 3) << 10) | ((px[i + 1] >> 3) << 5) | (px[i + 2] >> 3);
-    let bin = bins.get(key);
-    if (!bin) bins.set(key, bin = [0, 0, 0, 0]);
-    bin[0] += px[i]; bin[1] += px[i + 1]; bin[2] += px[i + 2]; bin[3]++;
-  }
-  const points = [...bins.values()].map(([r, g, b, n]) => [r / n, g / n, b / n, n]);
-  if (points.length <= count) return points.map(p => [Math.round(p[0]), Math.round(p[1]), Math.round(p[2])]);
-  // 색이 가장 넓게 퍼진(분산이 큰) 상자를 그 축의 평균에서 둘로 나눈다.
-  // 픽셀 수의 중앙값으로 나누면 넓은 배경에 색을 다 써 버려서, 작은 영역의 또렷한 색이 탁하게 합쳐진다.
-  const spread = box => {
-    let best = { axis: 0, variance: 0, mean: 0 };
-    for (let c = 0; c < 3; c++) {
-      let sum = 0, n = 0;
-      for (const p of box) { sum += p[c] * p[3]; n += p[3]; }
-      const m = sum / n;
-      let variance = 0;
-      for (const p of box) variance += (p[c] - m) * (p[c] - m) * p[3];
-      if (variance > best.variance) best = { axis: c, variance, mean: m };
-    }
-    return best;
-  };
-  const boxes = [points];
-  while (boxes.length < count) {
-    let pick = -1, chosen = null;
-    boxes.forEach((box, k) => {
-      if (box.length < 2) return;
-      const s = spread(box);
-      if (!chosen || s.variance > chosen.variance) { chosen = s; pick = k; }
-    });
-    if (pick < 0 || !(chosen.variance > 0)) break;
-    const low = boxes[pick].filter(p => p[chosen.axis] <= chosen.mean), high = boxes[pick].filter(p => p[chosen.axis] > chosen.mean);
-    if (low.length === 0 || high.length === 0) break;
-    boxes.splice(pick, 1, low, high);
-  }
-  const mean = box => { let r = 0, g = 0, b = 0, n = 0; for (const p of box) { r += p[0] * p[3]; g += p[1] * p[3]; b += p[2] * p[3]; n += p[3]; } return [r / n, g / n, b / n]; };
-  let palette = boxes.map(mean);
-  for (let round = 0; round < 4; round++) {
-    const groups = palette.map(() => []);
-    for (const p of points) groups[labNearest(p[0], p[1], p[2], palette)].push(p);
-    palette = palette.map((c, k) => (groups[k].length ? mean(groups[k]) : c));
-  }
-  return palette.map(c => [Math.round(c[0]), Math.round(c[1]), Math.round(c[2])]);
-}
-
-function labNearest(r, g, b, palette) {
-  let best = 0, closest = Infinity;
-  for (let k = 0; k < palette.length; k++) {
-    const dr = r - palette[k][0], dg = g - palette[k][1], db = b - palette[k][2];
-    const d = dr * dr + dg * dg * 2 + db * db;
-    if (d < closest) { closest = d; best = k; }
-  }
-  return best;
-}
-
-/** 지금 설정으로 결과를 다시 만든다(그림이 없으면 아무것도 안 함). */
+/** 지금 설정으로 결과를 다시 만든다(그림이 없거나 이미 계산 중이면 아무것도 안 함). 계산은 작업자가 한다. */
 function labRun() {
   const lab = state.lab, raw = labSource();
-  if (!raw) return;
+  if (!raw || lab.running) return;
   // 배경 지우기: 지운 그림이 아직 없으면 받아 온 뒤에 다시 불린다.
   if (lab.cutout && lab.cut?.from !== raw) { labCutout(raw); return; }
   const source = lab.cutout && lab.cut.picture ? lab.cut.picture : raw;
   const backdrop = !lab.cutout ? '' : lab.cut.picture ? ' · 배경 지움' : ' · 배경을 지우지 못해 그림 전체를 변환';
-  // 결과 크기를 골랐으면 긴 변이 그 칸 수가 되게 묶는다(원본이 더 작으면 키우지 않고 원본 크기 그대로).
-  const longSide = Math.max(source.w, source.h);
-  const wanted = lab.size ? Math.max(1, longSide / lab.size) : lab.block;
-  const voting = lab.method === 'vote';
-  const small = voting ? labVote(source, wanted, lab.protect) : labShrink(source, wanted);
-  const mended = voting && lab.repair ? labRepairOutline(small) : 0;
-  const palette = lab.mode === 'custom'
-    ? lab.palette.slice(0, lab.count).map(hex => [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)])
-    : labAutoPalette(small, lab.count);
-  const px = small.bytes, cache = new Map(), used = new Set();
-  for (let i = 0; i < px.length; i += 4) {
-    if (px[i + 3] === 0) continue;
-    const key = (px[i] << 16) | (px[i + 1] << 8) | px[i + 2];
-    let k = cache.get(key);
-    if (k === undefined) cache.set(key, k = labNearest(px[i], px[i + 1], px[i + 2], palette));
-    px[i] = palette[k][0]; px[i + 1] = palette[k][1]; px[i + 2] = palette[k][2];
-    used.add(k);
-  }
-  lab.result = { w: small.w, h: small.h, bytes: px };
-  const how = lab.size
-    ? `긴 변 ${lab.size}칸에 맞춤${longSide < lab.size ? ' (원본이 더 작아 원본 크기 그대로)' : ''}`
-    : `도트 크기 ${lab.block}px${small.scale > wanted ? ` (큰 그림이라 한 변 ${LAB_MAX_SIDE}칸으로 맞춤)` : ''}`;
-  const way = !voting ? '' : ` · 투표 방식${lab.protect ? ` · 디테일 지킴 ${small.kept}칸` : ''}${lab.repair ? ` · 외곽선 틈 메움 ${mended}칸` : ''}`;
-  lab.status = `실험(베타) · ${small.w}×${small.h} px${backdrop}${way} · ${how} · ${lab.mode === 'custom' ? '커스텀 팔레트' : '자동 추출'} ${lab.count}색 중 ${used.size}색 사용`;
+  const longSide = Math.max(source.w, source.h), maple = lab.method === 'maple';
+  const options = labOptions(source), wanted = options.wanted;
+  const ticket = lab.running = { options };
+  // 화면을 그리는 도중에 불리므로, 그리기가 끝난 뒤에 맡긴다. 실패하면 설정을 바꿀 때까지 다시 시도하지 않는다.
+  Promise.resolve().then(() => engine.submit('lab', { source, options }, '실험 탭 도트 계산 중', done => {
+    if (lab.running !== ticket) return;
+    lab.running = null;
+    lab.result = { w: done.w, h: done.h, bytes: done.bytes };
+    const how = lab.size
+      ? `긴 변 ${lab.size}칸에 맞춤${longSide < lab.size ? ' (원본이 더 작아 원본 크기 그대로)' : ''}`
+      : `도트 크기 ${lab.block}px${done.scale > wanted ? ` (큰 그림이라 한 변 ${LAB_MAX_SIDE}칸으로 맞춤)` : ''}`;
+    const m = options.maple;
+    const way = maple ? ` · 메이플 램프 · 재질 ${done.materials}개 · 음영 ${m.tones}단계 · 윤곽선 ${LAB_OUTLINES.find(([v]) => v === m.outline)[1]}`
+        + `${m.hueShift ? ' · 휴 시프트' : ''}${m.boundary ? ' · 재질 경계선' : ''}${done.specks ? ` · 외톨이 음영 점 ${done.specks}칸 정리` : ''}`
+      : options.method !== 'vote' ? '' : ` · 투표 방식${options.protect ? ` · 디테일 지킴 ${done.kept}칸` : ''}${options.repair ? ` · 외곽선 틈 메움 ${done.mended}칸` : ''}`;
+    const colors = maple ? `${done.used}색 사용` : `${lab.mode === 'custom' ? '커스텀 팔레트' : '자동 추출'} ${lab.count}색 중 ${done.used}색 사용`;
+    lab.status = `실험(베타) · ${done.w}×${done.h} px${backdrop}${way} · ${how} · ${colors}`;
+  }));
 }
 
 function labControls() {
-  const lab = state.lab, source = labSource(), off = !source;
+  const lab = state.lab, source = labSource(), off = !source, maple = lab.method === 'maple';
   const count = el('select', { disabled: off, onchange: event => setLab('count', Number(event.target.value)) },
     ...LAB_COUNTS[lab.mode].map(v => el('option', { value: String(v), textContent: `${v}색`, selected: v === lab.count })));
   count.setAttribute('aria-label', '팔레트 색 수');
@@ -344,7 +185,7 @@ function labControls() {
     el('option', { value: '0', textContent: '도트 크기대로', selected: !lab.size }),
     ...sizeChoices().map(v => el('option', { value: String(v), textContent: `긴 변 ${v}칸`, selected: v === lab.size })));
   size.setAttribute('aria-label', '결과 크기');
-  const swatches = lab.mode === 'custom' && el('div', { className: 'swatches' },
+  const swatches = lab.mode === 'custom' && !maple && el('div', { className: 'swatches' },
     ...lab.palette.slice(0, lab.count).map((hex, k) => {
       const input = el('input', { type: 'color', value: '#' + hex, title: `${k + 1}번 색 #${hex} — 눌러서 바꾸기`,
         onchange: () => setLab('palette', lab.palette.map((c, j) => (j === k ? input.value.slice(1).toLowerCase() : c))) });
@@ -361,18 +202,30 @@ function labControls() {
         '캐릭터만 남기고 배경을 지운 뒤 도트로 바꿉니다. 끄면 그림 전체를 배경째 바꿉니다. 배경이 복잡한 그림은 처음 한 번 배경 분리 AI 파일을 받습니다.')),
     row(labelled('결과 크기', size),
       stepper(`도트 크기 ${lab.block}px`, lab.block, 1, 32, 1, v => setLab('block', v), off || Boolean(lab.size)),
-      labelled('색 뽑는 방식', segmented([['auto', '자동 추출'], ['custom', '커스텀 팔레트']], lab.mode, v => setLab('mode', v), off, '색 뽑는 방식')),
-      tip(lab.mode === 'custom'
+      !maple && labelled('색 뽑는 방식', segmented([['auto', '자동 추출'], ['custom', '커스텀 팔레트']], lab.mode, v => setLab('mode', v), off, '색 뽑는 방식')),
+      !maple && tip(lab.mode === 'custom'
         ? '커스텀 팔레트: 정해 둔 색만 씁니다. 색 칸을 눌러 바꾸세요. 여러 그림의 색감을 맞추거나 옛 게임 느낌을 낼 때 좋고, 원본과 색이 많이 달라질 수 있습니다.'
         : '자동 추출: 그림에 쓰인 색과 가장 가까운 색을 골라 원본 색감을 유지합니다. 도트 크기는 원본 몇 픽셀을 한 칸으로 묶을지입니다(클수록 칸이 굵어짐). 결과 크기를 고르면 도트 크기 대신 긴 변을 그 칸 수에 맞춥니다.'),
-      labelled('팔레트 색 수', count)),
-    row(labelled('줄이는 방식', segmented([['average', '평균'], ['vote', '투표']], lab.method, v => setLab('method', v), off, '줄이는 방식')),
+      !maple && labelled('팔레트 색 수', count)),
+    row(labelled('줄이는 방식', segmented([['average', '평균'], ['vote', '투표'], ['maple', '메이플 램프']], lab.method, v => setLab('method', v), off, '줄이는 방식')),
       lab.method === 'vote' && toggle('작은 디테일 지키기', lab.protect, v => setLab('protect', v), off,
         '칸보다 가는 선이나 눈 하이라이트처럼 작고 둘레와 밝기가 뚜렷이 다른 부분이 투표에서 져서 사라지지 않게 합니다.'),
       lab.method === 'vote' && toggle('외곽선 틈 메우기', lab.repair, v => setLab('repair', v), off,
         '배경을 지운 그림에서, 어두운 바깥 외곽선이 한 칸만 밝게 끊긴 곳을 옆 외곽선 색으로 메웁니다. 어두운 외곽선이 없는 그림은 건드리지 않습니다.'),
-      tip(lab.method === 'vote'
+      tip(maple
+        ? '메이플 램프: 비슷한 색을 재질로 묶고, 재질마다 밝기 단계(음영 램프)와 색 있는 윤곽선을 만듭니다. 게임 스킨처럼 명암과 색이 살아납니다.'
+        : lab.method === 'vote'
         ? '투표: 칸마다 가장 넓은 색 영역을 고르고, 색은 그 영역의 원본 색으로 칠합니다. 경계가 탁해지지 않습니다.'
         : '평균: 칸 안의 색을 섞습니다. 부드럽지만 경계가 탁해질 수 있습니다.')),
+    maple && row(
+      stepper(`재질 ${lab.mapleMaterials}개`, lab.mapleMaterials, 2, 16, 1, v => setLab('mapleMaterials', v), off),
+      stepper(`음영 ${lab.mapleTones}단계`, lab.mapleTones, 2, 5, 1, v => setLab('mapleTones', v), off),
+      labelled('윤곽선', segmented(LAB_OUTLINES, lab.mapleOutline, v => setLab('mapleOutline', v), off, '윤곽선 스타일'))),
+    maple && row(
+      toggle('휴 시프트', lab.mapleHueShift, v => setLab('mapleHueShift', v), off,
+        '그림자 쪽은 보라·파랑 쪽으로, 밝은 쪽은 노랑 쪽으로 색상을 살짝 돌리고 어두운 단계의 채도를 올립니다. 무채색 재질은 그대로입니다.'),
+      toggle('재질 경계선', lab.mapleBoundary, v => setLab('mapleBoundary', v), off,
+        '색이 크게 다른 재질 두 덩어리가 맞닿는 곳에도 선을 그어 옷·머리·장식을 나눕니다. 작은 하이라이트·볼터치에는 긋지 않습니다.'),
+      tip('재질 수가 많을수록 색이 세밀해지고, 음영 단계가 많을수록 명암이 부드럽습니다. 혼자 튀는 음영 점은 자동으로 정리합니다.')),
     swatches && row(swatches, el('button', { type: 'button', textContent: '기본 색으로', onclick: () => setLab('palette', labDefaultPalette()) })));
 }

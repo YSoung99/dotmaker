@@ -1,7 +1,7 @@
-# 릴리스 만들기: `v3.10.0`처럼 v+버전 태그를 올리면 윈도우·맥·리눅스 설치 파일을 각 운영체제에서 만들고,
-# 프로그램 안 업데이트에 필요한 latest*.yml·*.blockmap과 함께 깃허브 릴리스로 올린다.
+# 릴리스 만들기: `v3.11.0`처럼 v+버전 태그를 올리면 윈도우·맥·리눅스 설치 파일을 각 운영체제에서 만들고,
+# 프로그램 안 업데이트에 필요한 latest*.yml·*.blockmap·맥 zip과 함께 깃허브 릴리스로 올린다(바로 공개).
 # 릴리스 설명은 README '업데이트 기록'의 그 버전 줄을 쓴다.
-name: release
+name: 설치 파일 릴리스
 
 on:
   push:
@@ -35,7 +35,10 @@ jobs:
           version=$(node -p "require('./package.json').version")
           [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "package.json 버전($version)과 태그($GITHUB_REF_NAME)가 다릅니다"; exit 1; }
       - run: npm ci
+      - run: npm test
       - run: npm run ${{ matrix.script }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.os }}

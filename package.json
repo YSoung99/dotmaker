@@ -1,7 +1,7 @@
 {
   "name": "dotmaker",
   "productName": "도트메이커",
-  "version": "3.10.0",
+  "version": "3.11.0",
   "description": "캐릭터 그림을 원본 그대로 살린 도트 그림으로 바꾸는 프로그램",
   "author": "YSoung99",
   "license": "MIT",
@@ -11,6 +11,7 @@
   "desktopName": "dotmaker.desktop",
   "scripts": {
     "build": "node tools/build.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
     "start": "node tools/build.mjs && electron .",
     "dist:win": "node tools/build.mjs && electron-builder --win nsis --x64 --publish never",
     "dist:mac": "node tools/build.mjs && electron-builder --mac dmg zip --arm64 --publish never -c.productName=DotMaker",

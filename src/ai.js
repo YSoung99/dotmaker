@@ -39,6 +39,7 @@ async function download(id, progress) {
     }
   }
   if (received !== file.size) throw new DotError(`${file.title} 크기가 예상과 다릅니다.`);
+  if (!(await matchesHash(id, bytes))) throw new DotError(`${file.title} 내용이 원본과 다릅니다(sha256 불일치). 다시 받거나, 설명서 탭에서 파일을 직접 받아 넣어 주세요.`);
   return bytes;
 }
 

@@ -1,27 +1,71 @@
 // 클라우드 AI 보정(화면에서 부른다). 사용자가 넣은 자기 API 키로 각 서비스에 그림을 보내 'AI 그림'을 받는다.
-// 키는 이 브라우저(localStorage)에만 두고 파일·코드에 남기지 않는다. 보내기 전에 받는 곳과 대략의 요금을 묻는다.
+// 키는 프로그램 본체가 운영체제 암호화 저장소에 보관하고, 화면은 끝 4자리만 기억한다. 보내기 전에 받는 곳과 대략의 요금을 묻는다.
 // 세 서비스 모두 브라우저(file:// 포함) 호출을 허용한다(2026-11-08 확인). Gemini는 Api-Revision 헤더를 보내면 막힌다.
 const CLOUD = {
   pixellab: {
-    name: 'PixelLab', detail: '도트 전용 · 결과가 바로 도트 그림', host: 'api.pixellab.ai', price: '약 $0.01',
+    name: 'PixelLab', detail: '도트 전용 · 결과가 바로 도트 그림', host: 'api.pixellab.ai', price: '1장 약 $0.01',
     keyPage: 'https://www.pixellab.ai/', keyHint: 'PixelLab 계정의 API 토큰',
   },
   gemini: {
-    name: 'Gemini', detail: '나노 바나나 2.1 · 도트 느낌 그림 → 도트화', host: 'generativelanguage.googleapis.com', price: '약 $0.034',
+    name: 'Gemini', detail: '나노 바나나 2.1 · 도트 느낌 그림 → 도트화', host: 'generativelanguage.googleapis.com', price: '1장 약 $0.034',
     keyPage: 'https://aistudio.google.com/apikey', keyHint: 'Google AI Studio의 API 키',
   },
   openai: {
-    name: 'OpenAI', detail: 'GPT Image 2.5 · 도트 느낌 그림 → 도트화', host: 'api.openai.com', price: '약 $0.01~0.05',
+    name: 'OpenAI', detail: 'GPT Image 2.5 · 도트 느낌 그림 → 도트화', host: 'api.openai.com',
+    price: '쓴 토큰만큼(그림 출력 100만 토큰당 $30, 품질이 높을수록 많이 씀 · 실제 요금은 결과에 표시)',
     keyPage: 'https://platform.openai.com/api-keys', keyHint: 'OpenAI 플랫폼의 API 키(sk-…)',
   },
 };
+// OpenAI 모델과 토큰 요금(달러/100만 토큰). 두 모델은 요금이 같고 품질마다 쓰는 토큰 수가 다르다(2026-11-18 공식 문서 확인).
+const OPENAI_MODELS = { flare: 'gpt-image-2.5-flare', sunburst: 'gpt-image-2.5-sunburst' };
+const OPENAI_RATES = { imageInput: 8, textInput: 5, output: 30 };
+
+/** OpenAI 응답의 usage(토큰 수)로 이번 요금(달러)을 계산한다. usage가 없으면 null. */
+function openaiCost(usage) {
+  if (!usage) return null;
+  const image = usage.input_tokens_details?.image_tokens ?? 0;
+  const text = usage.input_tokens_details?.text_tokens ?? Math.max(0, (usage.input_tokens ?? 0) - image);
+  return (image * OPENAI_RATES.imageInput + text * OPENAI_RATES.textInput + (usage.output_tokens ?? 0) * OPENAI_RATES.output) / 1e6;
+}
+
 const CLOUD_PROMPT = 'Redraw this exact character as a clean pixel art sprite. Keep the same pose, face, expression, proportions and colors. '
   + 'Crisp 1-pixel dark outlines, flat colors with a small palette, no anti-aliasing, no blur, plain white background, nothing else in the image.';
 
+// 키 값은 요청을 보낼 때만 get으로 꺼낸다. 암호화 저장소를 못 쓰면(본체 없음·저장소 오류) 이번 실행 동안만 메모리에 둔다.
 const cloudKey = {
-  get: id => { try { return localStorage.getItem('dotmaker.key.' + id) || ''; } catch { return ''; } },
-  set: (id, key) => { try { localStorage.setItem('dotmaker.key.' + id, key); } catch { /* 저장 못 하면 이번만 쓴다 */ } },
-  clear: id => { try { localStorage.removeItem('dotmaker.key.' + id); } catch { /* 없음 */ } },
+  memory: {},
+  tails: {},   // 서비스마다 저장된 키의 끝 4자리('' = 없음)
+  tail: id => cloudKey.tails[id] ?? '',
+  async get(id) {
+    const stored = desktop ? await desktop.getCloudKey(id).catch(() => '') : '';
+    return stored || cloudKey.memory[id] || '';
+  },
+  /** 저장하고, 암호화 저장소에 넣었으면 true(못 넣어 이번 실행 동안만 기억하면 false). */
+  async set(id, key) {
+    cloudKey.tails[id] = key.slice(-4);
+    try {
+      await desktop.setCloudKey(id, key);
+      delete cloudKey.memory[id];
+      return true;
+    } catch {
+      cloudKey.memory[id] = key;
+      return false;
+    }
+  },
+  async clear(id) {
+    delete cloudKey.memory[id];
+    cloudKey.tails[id] = '';
+    await desktop?.clearCloudKey(id);
+  },
+  /** 시작할 때: 예전 버전이 localStorage에 평문으로 둔 키를 암호화 저장소로 옮기고 지운 뒤, 끝 4자리를 읽어 둔다. */
+  async load() {
+    for (const id of Object.keys(CLOUD)) {
+      let legacy = null;
+      try { legacy = localStorage.getItem('dotmaker.key.' + id); } catch { /* 저장소를 못 읽으면 옮길 것도 없다 */ }
+      if (legacy && (await cloudKey.set(id, legacy))) localStorage.removeItem('dotmaker.key.' + id);
+      cloudKey.tails[id] = (await cloudKey.get(id)).slice(-4);
+    }
+  },
 };
 
 /** 그림(곧은 RGBA 바이트)을 흰 바탕 PNG(base64)로. width×height 칸에 비율 유지해 가운데 둔다. */
@@ -161,7 +205,7 @@ async function cloudPaint(id, key, subject, size, options) {
     return { blob: base64ToBlob(b64), pixel: false, cost: null };
   }
   const form = new FormData();
-  form.append('model', 'gpt-image-2.5-sunburst');
+  form.append('model', OPENAI_MODELS[options.model] ?? OPENAI_MODELS.sunburst);
   form.append('image', input.blob, 'input.png');
   form.append('prompt', CLOUD_PROMPT);
   form.append('size', '1024x1024');
@@ -171,7 +215,8 @@ async function cloudPaint(id, key, subject, size, options) {
     method: 'POST', headers: { authorization: `Bearer ${key}` }, body: form,
   });
   if (!response.ok) throw await failure('OpenAI', response);
-  const b64 = findImage(await response.json());
+  const body = await response.json();
+  const b64 = findImage(body);
   if (!b64) throw new CloudError('OpenAI: 응답에 그림이 없습니다.');
-  return { blob: base64ToBlob(b64), pixel: false, cost: null };
+  return { blob: base64ToBlob(b64), pixel: false, cost: openaiCost(body.usage) };
 }

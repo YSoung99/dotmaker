@@ -64,7 +64,8 @@ const state = {
     provider: ['pixellab', 'gemini', 'openai'].includes(store.get('cloud.provider', 'pixellab')) ? store.get('cloud.provider', 'pixellab') : 'pixellab',
     faithful: store.get('cloud.faithful', true),
     strength: store.get('cloud.strength', 300),
-    quality: store.get('cloud.quality', 'medium'),
+    quality: ['low', 'medium', 'high'].includes(store.get('cloud.quality', 'medium')) ? store.get('cloud.quality', 'medium') : 'medium',
+    model: store.get('cloud.model', 'sunburst') === 'flare' ? 'flare' : 'sunburst',   // OpenAI: Flare(빠름) / Sunburst(정밀)
     mode: store.get('cloud.mode', 'redraw') === 'correct' ? 'correct' : 'redraw',  // PixelLab: 다시 그리기 / 다듬기
     fix: store.get('cloud.fix', 0.1),                                                  // 다듬기 강도 0~1
     editingKey: false,
@@ -114,7 +115,7 @@ const engine = (() => {
   return {
     submit(type, payload, label, apply, fail) {
       if (!worker) { state.error = '이 브라우저에서 작업자를 시작하지 못했습니다. 크롬·엣지 최신 버전으로 열어 주세요.'; update(); fail?.(state.error); return; }
-      const drops = { open: ['open', 'resize', 'redot'], resize: ['resize', 'redot'], redot: ['redot'] }[type] ?? [];
+      const drops = { open: ['open', 'resize', 'redot'], resize: ['resize', 'redot'], redot: ['redot'], lab: ['lab'] }[type] ?? [];
       waiting = waiting.filter(job => !drops.includes(job.type));
       waiting.push({ id: nextId++, type, payload, label, apply, fail });
       if (running) { state.busy = label; updateStatus(); }
@@ -240,16 +241,16 @@ function applyOpened(data, original, name) {
   state.original = { w: original.w, h: original.h, bytes: Raster.fromPremultiplied(original.data, original.w, original.h).straightBytes() };
   state.fileName = name;
   state.cloud.result = null;
-  state.lab.result = null;
+  labReset();
   state.aligned = null;
   state.compare = false;
   if (state.stage !== 'help') state.stage = 'dot';
 }
 
-/** 한 장이면 열고, 여러 장이면 지금 설정으로 모두 도트화해 고른 폴더에 저장한다. */
+/** 한 장이면 열고, 여러 장이면 지금 설정으로 모두 바꿔 고른 폴더에 저장한다(실험 탭에서는 실험 탭 설정으로). */
 function openFiles(files) {
   const images = files.filter(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name));
-  if (images.length > 1) batch(images); else open(images[0]);
+  if (images.length > 1) (state.stage === 'lab' ? labBatch : batch)(images); else open(images[0]);
 }
 
 async function batch(files) {
@@ -338,7 +339,7 @@ function result(stage = state.stage) {
 
 // ───────────── AI 보정(클라우드)
 /** PixelLab 다듬기: 지금 도트화 결과를 크기 그대로 보내 정리받는다. */
-async function runCorrect(key) {
+async function runCorrect() {
   const before = state.cloud.input?.picture ?? state.product.dotted, strength = state.cloud.fix;
   if (before.w * before.h > 1024 * 1024) { state.error = 'PixelLab 다듬기는 1024×1024 넓이까지입니다. 더 작은 도트 그림을 넣어 주세요.'; update(); return; }
   if (!confirm(`${state.cloud.input ? `넣은 그림 '${state.cloud.input.name}'` : '지금 도트화 결과'}(${before.w}×${before.h})를 PixelLab(api.pixellab.ai)로 보내 다듬기를 합니다.\n요금: PixelLab이 정하며 결과에 표시됩니다 (내 API 키 계정에 청구)\n\n계속할까요?`)) return;
@@ -347,7 +348,7 @@ async function runCorrect(key) {
   state.error = null;
   update();
   try {
-    const corrected = await cloudCorrect(key, before, strength);
+    const corrected = await cloudCorrect(await cloudKey.get('pixellab'), before, strength);
     const image = await decode(corrected.blob);
     const final = { w: image.w, h: image.h, bytes: Raster.fromPremultiplied(image.data, image.w, image.h).straightBytes() };
     const cost = corrected.cost !== null && corrected.cost !== undefined ? ` · 이번 요금 $${Number(corrected.cost).toFixed(4)}` : '';
@@ -361,33 +362,33 @@ async function runCorrect(key) {
 
 function setCloud(key, value) {
   state.cloud[key] = value;
-  if (['provider', 'faithful', 'strength', 'quality', 'mode', 'fix'].includes(key)) store.set('cloud.' + key, value);
+  if (['provider', 'faithful', 'strength', 'quality', 'model', 'mode', 'fix'].includes(key)) store.set('cloud.' + key, value);
   update();
 }
 
 const correcting = () => state.cloud.provider === 'pixellab' && state.cloud.mode === 'correct';
 
 async function runCloud() {
-  const id = state.cloud.provider, info = CLOUD[id], key = cloudKey.get(id), input = state.cloud.input;
-  if (!(state.product || input) || !key || state.busy) return;
-  if (correcting()) return runCorrect(key);
+  const id = state.cloud.provider, info = CLOUD[id], input = state.cloud.input;
+  if (!(state.product || input) || !cloudKey.tail(id) || state.busy) return;
+  if (correcting()) return runCorrect();
   const size = state.product ? [state.product.dotted.w, state.product.dotted.h] : dimensions();
   if (!size) return;
-  if (!confirm(`${input ? `넣은 그림 '${input.name}'` : '캐릭터 그림'}을(를) ${info.name}(${info.host})로 보내 AI 보정을 합니다.\n요금: 1장 ${info.price} (내 API 키 계정에 청구)\n\n계속할까요?`)) return;
+  if (!confirm(`${input ? `넣은 그림 '${input.name}'` : '캐릭터 그림'}을(를) ${info.name}(${info.host})로 보내 AI 보정을 합니다.\n요금: ${info.price} (내 API 키 계정에 청구)\n\n계속할까요?`)) return;
   state.cloud.result = null;
   try {
     const subject = input ? input.picture : (await engine.request('subject', {}, `${info.name}에 보낼 그림 준비 중`)).subject;
     state.busy = `${info.name}가 그리는 중 (보통 몇 초~1분)`;
     state.error = null;
     update();
-    const painted = await cloudPaint(id, key, subject, size, state.cloud);
+    const painted = await cloudPaint(id, await cloudKey.get(id), subject, size, state.cloud);
     const image = await decode(painted.blob);
     const ai = { w: image.w, h: image.h, bytes: Raster.fromPremultiplied(image.data, image.w, image.h).straightBytes() };
     state.busy = null;
     const done = await engine.request('cloud', { image, w: size[0], h: size[1], settings: { ...state.settings }, pixel: painted.pixel },
       painted.pixel ? 'AI 도트 그림 배경 지우는 중' : 'AI 그림을 도트화하는 중');
     const cost = painted.cost !== null && painted.cost !== undefined ? ` · 이번 요금 $${Number(painted.cost).toFixed(4)}` : '';
-    state.cloud.result = { ai, final: done.final, pixel: painted.pixel, status: `${info.name} · ${done.status}${cost}` };
+    state.cloud.result = { ai, final: done.final, pixel: painted.pixel, status: `${info.name}${id === 'openai' ? ` ${state.cloud.model === 'flare' ? 'Flare' : 'Sunburst'} · 품질 ${{ low: '낮음', medium: '보통', high: '높음' }[state.cloud.quality]}` : ''} · ${done.status}${cost}` };
   } catch (error) {
     state.busy = null;
     state.error = error instanceof CloudError ? error.message : `AI 보정을 하지 못했습니다. (${error.message})`;
@@ -452,6 +453,7 @@ function save() {
 }
 
 function setSetting(key, value) {
+  rememberSettings('dot');
   state.settings = { ...state.settings, [key]: value };
   store.set('settings', state.settings);
   state.notice = null;
@@ -459,6 +461,48 @@ function setSetting(key, value) {
   update();
   redot();
 }
+
+// ───────────── 되돌리기(설정 히스토리)
+// 도트화·실험 탭의 설정 변경을 탭마다 기억해 Ctrl/⌘+Z로 되돌리고 Ctrl/⌘+Shift+Z로 다시 한다.
+const settingsHistory = { dot: { undo: [], redo: [] }, lab: { undo: [], redo: [] } };
+const HISTORY_LIMIT = 100;
+
+const settingsOf = tab => (tab === 'dot' ? { ...state.settings } : Object.fromEntries(LAB_KEYS.map(k => [k, state.lab[k]])));
+
+/** 설정을 바꾸기 직전에 부른다. 새로 바꾸면 '다시 하기'할 것은 버린다. */
+function rememberSettings(tab) {
+  const history = settingsHistory[tab];
+  history.undo.push(settingsOf(tab));
+  if (history.undo.length > HISTORY_LIMIT) history.undo.shift();
+  history.redo = [];
+}
+
+function restoreSettings(tab, saved) {
+  if (tab === 'dot') {
+    state.settings = saved;
+    store.set('settings', saved);
+    state.jevApplied = false;
+  } else {
+    Object.assign(state.lab, saved);
+    for (const k of LAB_KEYS) store.set('lab.' + k, state.lab[k]);
+    labReset();
+  }
+  state.notice = null;
+  update();
+  if (tab === 'dot') redot();
+}
+
+/** back: 되돌리기(아니면 다시 하기). 지금 탭이 도트화·실험이 아니거나 기록이 없으면 아무것도 안 한다. */
+function stepSettings(back) {
+  const history = settingsHistory[state.stage];
+  const from = back ? history?.undo : history?.redo;
+  if (!from?.length) return;
+  (back ? history.redo : history.undo).push(settingsOf(state.stage));
+  restoreSettings(state.stage, from.pop());
+}
+
+/** 글자를 입력하는 칸(입력칸·글상자)에 포커스가 있는지. 이때는 브라우저 기본 되돌리기를 쓴다. */
+const typing = () => document.activeElement?.matches('textarea, [contenteditable], input:not([type=checkbox]):not([type=radio]):not([type=color]):not([type=file])');
 
 // ───────────── AI 파일(설명서 탭)
 async function refreshAIFiles() {
@@ -474,7 +518,9 @@ async function importAIFiles(files) {
     const id = identifyAIFile(file.size);
     if (!id) { unknown.push(file.name); continue; }
     try {
-      await fileStore.put(id, new Uint8Array(await file.arrayBuffer()));
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (!(await matchesHash(id, bytes))) { unknown.push(`${file.name}(크기는 같지만 내용이 원본과 다름)`); continue; }
+      await fileStore.put(id, bytes);
       saved.push(AI_FILES[id].name);
     } catch (error) {
       console.error(error);
@@ -717,19 +763,21 @@ function controls(stage) {
 
 /** API 키 줄: 저장돼 있으면 끝 4자리와 바꾸기·지우기, 없으면 입력칸. AI 보정 탭이 쓴다. */
 function keyRow(id) {
-  const c = state.cloud, info = CLOUD[id], key = cloudKey.get(id);
-  if (key && c.editingKey !== id) {
-    return row(el('span', { textContent: `${info.name} API 키 저장됨 (…${key.slice(-4)})` }),
+  const c = state.cloud, info = CLOUD[id], tail = cloudKey.tail(id);
+  if (tail && c.editingKey !== id) {
+    return row(el('span', { textContent: `${info.name} API 키 저장됨 (…${tail})` }),
       el('button', { type: 'button', textContent: '키 바꾸기', onclick: () => setCloud('editingKey', id) }),
-      el('button', { type: 'button', textContent: '키 지우기', onclick: () => { cloudKey.clear(id); update(); } }));
+      el('button', { type: 'button', textContent: '키 지우기', onclick: async () => { await cloudKey.clear(id).catch(console.error); update(); } }));
   }
   const input = el('input', { type: 'password', placeholder: info.keyHint, autocomplete: 'off', spellcheck: false, className: 'key' });
   input.setAttribute('aria-label', `${info.name} API 키`);
-  const saveKey = () => {
+  const saveKey = async () => {
     const value = input.value.trim();
     if (!value) return;
-    cloudKey.set(id, value);
+    input.value = '';
+    const kept = await cloudKey.set(id, value);
     c.editingKey = false;
+    state.notice = kept ? null : '이 컴퓨터에서 암호화 저장소를 쓸 수 없어, 키를 이번 실행 동안만 기억합니다.';
     update();
   };
   input.onkeydown = event => { if (event.key === 'Enter') saveKey(); };
@@ -769,7 +817,7 @@ function inputRow() {
 }
 
 function cloudControls() {
-  const c = state.cloud, info = CLOUD[c.provider], key = cloudKey.get(c.provider), busy = Boolean(state.busy);
+  const c = state.cloud, info = CLOUD[c.provider], hasKey = Boolean(cloudKey.tail(c.provider)), busy = Boolean(state.busy);
   const options = c.provider === 'pixellab'
     ? el('div', { className: 'stack' },
       row(segmented([['redraw', '다시 그리기'], ['correct', '다듬기']], c.mode, v => setCloud('mode', v), busy, 'PixelLab 방식'),
@@ -782,7 +830,9 @@ function cloudControls() {
         : row(toggle('원본에 충실하게', c.faithful, v => setCloud('faithful', v), busy, 'PixelLab의 충실 모드(fixer). 끄면 AI가 도트 그림으로 새로 해석합니다.'),
           stepper(`원본 유지 ${c.strength}`, c.strength, 0, 600, 50, v => setCloud('strength', v), busy)))
     : c.provider === 'openai'
-      ? row(labelled('품질', segmented([['low', '낮음(싸고 빠름)'], ['medium', '보통']], c.quality, v => setCloud('quality', v), busy, '품질')))
+      ? row(labelled('모델', segmented([['flare', 'Flare(빠름)'], ['sunburst', 'Sunburst(정밀)']], c.model, v => setCloud('model', v), busy, 'OpenAI 모델')),
+        labelled('품질', segmented([['low', '낮음'], ['medium', '보통'], ['high', '높음']], c.quality, v => setCloud('quality', v), busy, '품질')),
+        el('span', { className: 'note', textContent: '두 모델은 토큰 요금이 같고, 품질이 높을수록 토큰을 많이 써서 비싸고 느립니다. 이번 요금은 받은 사용량으로 계산해 결과에 표시합니다.' }))
       : null;
   return el('div', { className: 'stack' },
     row(segmented(Object.entries(CLOUD).map(([id, v]) => [id, v.name]), c.provider, v => { c.editingKey = false; setCloud('provider', v); }, busy, 'AI 서비스'),
@@ -792,11 +842,11 @@ function cloudControls() {
     // 다듬기에 따로 넣은 그림은 크기 그대로 보내므로 결과 크기를 쓰지 않는다.
     row(sizeControl(correcting() && Boolean(c.input)), upscaleControl(), tip('AI 업스케일은 다시 그린 그림을 도트화하기 전에 적용됩니다(받은 그림이 이미 도트 그림이면 쓰지 않음).')),
     inputRow(),
-    row(el('button', { type: 'button', className: 'primary', textContent: 'AI 보정 실행', disabled: busy || !(state.product || c.input) || !key, onclick: runCloud }),
-      el('span', { className: 'note' }, correcting() ? `${info.host}로 전송 · 요금은 내 키 계정에 청구` : `${info.host}로 전송 · 1장에 ${info.price}(내 키 계정에 청구)`,
+    row(el('button', { type: 'button', className: 'primary', textContent: 'AI 보정 실행', disabled: busy || !(state.product || c.input) || !hasKey, onclick: runCloud }),
+      el('span', { className: 'note' }, `${info.host}로 전송 · ${correcting() ? '요금은' : info.price + ','} 내 키 계정에 청구`,
         tip(correcting()
-          ? `실행하면 보낼 그림이 ${info.host}로 전송되고 요금이 듭니다(결과에 표시, 내 키 계정에 청구). 키는 이 프로그램에만 저장됩니다.`
-          : `실행하면 보낼 그림이 ${info.host}로 전송되고 1장에 ${info.price} 요금이 듭니다(내 키 계정에 청구). 키는 이 프로그램에만 저장됩니다.`))),
+          ? `실행하면 보낼 그림이 ${info.host}로 전송되고 요금이 듭니다(결과에 표시, 내 키 계정에 청구). 키는 이 컴퓨터의 암호화 저장소에 보관됩니다.`
+          : `실행하면 보낼 그림이 ${info.host}로 전송되고 요금이 듭니다(${info.price}, 내 키 계정에 청구). 키는 이 컴퓨터의 암호화 저장소에 보관됩니다.`))),
   );
 }
 
@@ -888,6 +938,7 @@ function helpScreen() {
       '<b>도트화</b> 탭: 설정을 바꾸면 바로 다시 계산합니다. 계산 중에도 설정을 바꿀 수 있고, 마지막 설정으로 결과가 나옵니다.',
       '<b>PNG 저장…</b>: 지금 탭의 결과를 저장합니다. <kbd>Ctrl</kbd>+<kbd>S</kbd> · 저장 배율(1·2·4·8배)은 번짐 없이 키웁니다.',
       '<b>복사</b>: 지금 탭의 결과를 저장 배율대로 클립보드에 복사합니다. <kbd>Ctrl</kbd>+<kbd>C</kbd>',
+      '<b>되돌리기</b>: 도트화·실험 탭에서 설정을 바꾼 것을 하나씩 되돌립니다. <kbd>Ctrl</kbd>+<kbd>Z</kbd> · 다시 하기는 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>(맥은 <kbd>⌘</kbd>). 글자 입력 칸에 커서가 있을 때는 그 칸의 글자를 되돌립니다.',
       '<b>원본 보기</b>(결과 위 버튼): 결과 자리에 원본을 같은 위치·크기로 보여 줍니다. 눌러 가며 달라진 곳을 비교하세요.',
       '<b>보기</b>(미리보기 위): 결과를 맞춤·1×~8×로 키워 보고, <b>격자</b>로 도트 칸을 확인하고, 배경을 체커·흰색·검정으로 바꿀 수 있습니다. 저장되는 그림에는 영향이 없습니다. 회색 안내 옆 ⓘ에 마우스를 올리면 자세한 설명이 나옵니다.',
       '결과 크기·도트화 방식·AI 업스케일·체크 항목·저장 배율은 <b>다음에 켤 때도 그대로</b>입니다.',
@@ -898,8 +949,10 @@ function helpScreen() {
       '<b>도트 크기</b>: 원본 몇 픽셀을 한 칸으로 묶을지입니다. 결과는 원본 비율 그대로이고, 한 변이 512칸을 넘지 않게 맞춥니다.',
       `<b>결과 크기</b>: 긴 변 ${SETTINGS.size.min}~${SETTINGS.size.max}칸 중에서 고르면 원본 비율 그대로 그 크기에 맞춥니다(이때 도트 크기는 쓰지 않음). <b>도트 크기대로</b>로 두면 도트 크기를 씁니다.`,
       '<b>줄이는 방식</b>: <b>평균</b>은 칸 안의 색을 섞습니다. <b>투표</b>는 칸마다 가장 넓은 색 영역을 고르고 그 영역의 원본 색으로 칠해, 경계가 탁해지지 않고 선이 또렷합니다. 작은 크기(50칸 안팎)에서 차이가 큽니다.',
+      '<b>메이플 램프</b>: 비슷한 색을 재질로 묶고(재질 수 2~16), 재질마다 밝기 단계(음영 2~5단계)와 색 있는 윤곽선을 만듭니다. 게임 스킨처럼 명암과 색을 살릴 때 씁니다. <b>윤곽선</b>은 진한 잉크(한 가지 진한 고동색)·재질 색(재질마다 어두운 색)·없음 중에서 고르고, <b>휴 시프트</b>는 그림자를 보라·파랑 쪽으로 틀어 색감을 살리며, <b>재질 경계선</b>은 색이 크게 다른 재질 사이에 선을 긋습니다. 혼자 튀는 음영 점은 자동으로 정리합니다. 팔레트(색 뽑는 방식)는 쓰지 않습니다.',
       '<b>작은 디테일 지키기</b>(투표): 칸보다 가는 선과 눈 하이라이트가 사라지지 않게 합니다. <b>외곽선 틈 메우기</b>(투표): 배경을 지운 그림의 어두운 바깥 외곽선이 한 칸 끊긴 곳을 메웁니다.',
       '<b>자동 추출</b>: 그림에서 가장 가까운 8~256색을 골라 원본 색감을 유지합니다. <b>커스텀 팔레트</b>: 색 칸을 눌러 정한 색만 씁니다(기본은 옛 PC 느낌의 16색).',
+      '<b>여러 장 한꺼번에</b>: 실험 탭에서 이미지를 여러 장 끌어다 놓거나 <b>이미지 열기…</b>로 여러 장 고르면, 저장할 폴더를 묻고 <b>실험 탭 설정</b>(배경 지우기·줄이는 방식·색·저장 배율)으로 모두 바꿔 그 폴더에 저장합니다.',
       '베타 기능이라 동작과 화면이 바뀔 수 있습니다.',
     ])),
     section('도트화 설정', list([
@@ -934,7 +987,7 @@ function helpScreen() {
     section('AI 파일',
       el('p', { innerHTML: 'AI 기능(AI 업스케일·배경 분리·선 추출)은 처음 쓸 때 아래 파일을 <b>자동으로 받아 이 프로그램의 저장소에 보관</b>합니다(받다 끊기면 이어받음). 그다음부터는 인터넷 없이 됩니다.' }),
       el('p', { innerHTML: '<b>넣을 경로는 따로 없습니다.</b> 파일은 폴더가 아니라 프로그램 저장소(IndexedDB, 이름 <code>dotmaker-ai</code>)에 들어갑니다. 아래 <b>저장된 AI 파일 지우기</b>로 지울 수 있습니다.' }),
-      el('p', { innerHTML: '<b>직접 받아 넣기</b>(인터넷이 막힌 PC 등): 아래 <b>받는 주소</b>에서 파일을 받아(열리면 오른쪽 클릭 → \'다른 이름으로 링크 저장\') 어느 폴더에 두든 상관없이, <b>AI 파일 불러오기…</b>로 한꺼번에 고르면 됩니다. 파일은 크기로 알아보니 이름이 바뀌어도 괜찮지만, 내용(크기)은 그대로여야 합니다.' }),
+      el('p', { innerHTML: '<b>직접 받아 넣기</b>(인터넷이 막힌 PC 등): 아래 <b>받는 주소</b>에서 파일을 받아(열리면 오른쪽 클릭 → \'다른 이름으로 링크 저장\') 어느 폴더에 두든 상관없이, <b>AI 파일 불러오기…</b>로 한꺼번에 고르면 됩니다. 파일은 크기로 알아보니 이름이 바뀌어도 괜찮지만, 내용은 그대로여야 합니다(넣을 때 sha256으로 원본과 같은지 확인합니다).' }),
       el('p', { className: 'muted', textContent: '필요한 파일: 배경 분리 = 실행 도구 3개 + isnetis.onnx · 선 추출 = 실행 도구 3개 + model.safetensors' }),
       el('div', { className: 'table-wrap' }, table),
       actions,
@@ -943,9 +996,10 @@ function helpScreen() {
       '<b>AI 보정</b> 탭에서 서비스를 고르고 <b>내 API 키</b>를 넣은 뒤 <b>AI 보정 실행</b>을 누릅니다. 이 탭의 <b>결과 크기</b>(도트화 탭과 같은 값)로 결과가 나옵니다. 도트화 탭 이미지 대신 <b>다른 이미지 넣기…</b>(또는 이 탭에 끌어다 놓기)로 원하는 그림을 보낼 수도 있습니다.',
       '<b>PixelLab · 다시 그리기</b>: 도트 전용 AI라 결과가 바로 도트 그림입니다(배경만 지움). \'원본에 충실하게\'와 \'원본 유지\'(0~600, 높을수록 원본에 가깝게)로 조절합니다. 약 $0.01/장.',
       '<b>PixelLab · 다듬기</b>: 지금 도트화 결과를 크기 그대로 보내 잔점·계단 가장자리·색을 정리받습니다(투명 유지). 강도 0~1, 0.1부터 올려 보세요. 요금은 결과에 표시됩니다.',
-      '<b>Gemini</b>(나노 바나나 2.1) · <b>OpenAI</b>(GPT Image 2.5): 도트 느낌의 큰 그림을 받아 지금 도트화 설정으로 한 번 더 도트화합니다. 약 $0.034/장, $0.01~0.05/장.',
+      '<b>Gemini</b>(나노 바나나 2.1, 약 $0.034/장) · <b>OpenAI</b>(GPT Image 2.5): 도트 느낌의 큰 그림을 받아 지금 도트화 설정으로 한 번 더 도트화합니다.',
+      '<b>OpenAI 모델·품질</b>: <b>Flare</b>는 빠른 작은 모델, <b>Sunburst</b>는 정밀한 기본 모델입니다. 품질은 낮음·보통·높음. 요금은 쓴 토큰만큼(그림 출력 100만 토큰당 $30)이고 품질이 높을수록 토큰을 많이 써서 비쌉니다. 이번 요금은 결과에 표시됩니다.',
       '키 발급: PixelLab <code>pixellab.ai</code> 계정 · Gemini <code>aistudio.google.com/apikey</code> · OpenAI <code>platform.openai.com/api-keys</code>. 요금은 그 키의 계정에 청구됩니다(무료 사용량 없음).',
-      '실행할 때마다 <b>캐릭터 그림이 그 서비스 서버로 전송</b>됩니다. 보내기 전에 받는 곳과 요금을 묻습니다. 키는 이 프로그램에만 저장되고, \'키 지우기\'로 지울 수 있습니다.',
+      '실행할 때마다 <b>캐릭터 그림이 그 서비스 서버로 전송</b>됩니다. 보내기 전에 받는 곳과 요금을 묻습니다. 키는 이 컴퓨터의 암호화 저장소에 보관되고(화면에는 끝 4자리만), \'키 지우기\'로 지울 수 있습니다.',
     ])),
     section('문제 해결', list([
       '<b>설치할 때 \'Windows의 PC 보호\' 창이 뜸</b>: 개발자 서명이 없는 프로그램이라 그렇습니다. <b>추가 정보 → 실행</b>을 누르세요.',
@@ -954,8 +1008,8 @@ function helpScreen() {
       '<b>AI가 느림</b>: 그래픽카드 가속을 못 쓰면 CPU로 돌아 느립니다. 색 배경 그림은 보통 1~3초, 처음 한 번은 모델 받기로 1분쯤 걸립니다.',
       '<b>캐릭터를 분리하지 못함</b>: 캐릭터 주위에 여백이 있는 원본이나 투명 PNG가 가장 잘 됩니다.',
     ])),
-    section('맥과 윈도우', list([
-      '맥용과 윈도우용은 같은 코드로 만들어 기능과 결과가 같습니다.',
+    section('맥·윈도우·리눅스', list([
+      '맥용·윈도우용·리눅스용(.deb·.AppImage)은 같은 코드로 만들어 기능과 결과가 같습니다.',
     ])),
     el('p', { className: 'muted', textContent: `도트메이커 ${VERSION} · 모델: skytnt/anime-seg (Apache-2.0), p1atdev/MangaLineExtraction-hf (MIT), Real-ESRGAN (BSD-3-Clause) · 실행 도구: onnxruntime-web (MIT) · 프로그램 본체: Electron (MIT)` }),
   );
@@ -981,23 +1035,18 @@ function update() {
     tab.tabIndex = selected ? 0 : -1;
   }
   $('scale').value = String(state.exportScale);
-  const focused = document.activeElement?.getAttribute('aria-label');
   const scroll = $('panel').firstChild?.scrollTop ?? 0;
   const sheetScroll = document.querySelector('.sheet')?.scrollTop ?? 0;
   $('panel').replaceChildren(screen(state.stage));
   $('panel').firstChild.scrollTop = scroll;
   const sheet = document.querySelector('.sheet');
   if (sheet) sheet.scrollTop = sheetScroll;
-  if (focused === '가로' || focused === '세로') {
-    const input = document.querySelector(`[aria-label="${focused}"]`);
-    input?.focus();
-    input?.setSelectionRange(input.value.length, input.value.length);
-  }
 }
 
 // ───────────── 시작
 $('version').textContent = VERSION;
 checkUpdate();
+cloudKey.load().then(update, console.error);
 $('open').onclick = () => $('file').click();
 $('file').onchange = event => { openFiles([...event.target.files]); event.target.value = ''; };
 $('save').onclick = save;
@@ -1019,6 +1068,7 @@ document.addEventListener('keydown', event => {
   const key = event.key.toLowerCase();
   if (key === 'o') { event.preventDefault(); $('file').click(); }
   if (key === 's') { event.preventDefault(); save(); }
+  if (key === 'z' && !typing()) { event.preventDefault(); stepSettings(!event.shiftKey); }
 });
 let dragDepth = 0;
 document.addEventListener('dragenter', event => { event.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
@@ -1046,8 +1096,10 @@ document.addEventListener('copy', event => {
 function takeFiles(files) {
   const file = files.find(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name));
   if (!file) return;
-  // AI 보정 탭에서는 그 탭의 그림으로 넣고, 다른 탭에서는 도트화할 원본으로 연다.
-  if (state.stage === 'repair' || state.stage === 'lab') {
+  // AI 보정·실험 탭에서는 그 탭의 그림으로 넣고(실험 탭에 여러 장이면 일괄 변환), 다른 탭에서는 도트화할 원본으로 연다.
+  if (state.stage === 'lab' && files.filter(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name)).length > 1) {
+    openFiles(files);
+  } else if (state.stage === 'repair' || state.stage === 'lab') {
     loadPictureFile(file).then(picture => (state.stage === 'lab' ? setLabInput(picture, file.name) : setCloudInput(picture, file.name)))
       .catch(error => { state.error = error.message; update(); });
   } else openFiles(files);
