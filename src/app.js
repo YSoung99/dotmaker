@@ -18,7 +18,7 @@ function savedSettings() {
   for (const key of Object.keys(base)) if (typeof saved[key] === typeof base[key]) base[key] = saved[key];
   return base;
 }
-const savedSize = () => String(sizeChoices().includes(store.get('size', null)) ? store.get('size', null) : SETTINGS.size.initial);
+const savedSize = () => String(isSize(store.get('size', null)) ? store.get('size', null) : SETTINGS.size.initial);
 
 const state = {
   stage: 'dot',
@@ -193,8 +193,15 @@ let submittedSettings = null;
 const applyProduct = data => { state.product = { reduced: data.reduced, dotted: data.dotted, status: data.status }; };
 
 // 새 버전 알림: 깃허브의 최신 릴리스가 지금 버전보다 높으면 위쪽에 받기 링크를 보여 준다(실패하면 조용히 넘어감).
+// 프로그램이 스스로 업데이트할 수 있으면(윈도우 설치판·리눅스 AppImage) 켤 때 프로그램 본체가 확인하고 물으므로,
+// 여기서는 '업데이트 확인' 버튼만 둔다.
 async function checkUpdate() {
   try {
+    if (await window.dotmakerDesktop?.updateSupported?.()) {
+      $('version').after(el('button', { type: 'button', className: 'update-check', textContent: '업데이트 확인',
+        title: '새 버전이 있는지 지금 확인합니다. 있으면 프로그램 안에서 받아 설치합니다.', onclick: () => window.dotmakerDesktop.checkForUpdates() }));
+      return;
+    }
     const reply = await fetch(`https://api.github.com/repos/${SETTINGS.repository}/releases/latest`, { signal: AbortSignal.timeout(8000) });
     if (!reply.ok) return;
     const latest = String((await reply.json()).tag_name || '').replace(/^v/, '');
@@ -525,18 +532,58 @@ function toggle(text, checked, onChange, disabled, title = '') {
   return el('label', { className: 'toggle', title }, input, document.createTextNode(text));
 }
 
+/** 결과 크기로 쓸 수 있는 값인지(settings.js의 범위 안, 간격에 맞음). */
+function isSize(v) {
+  const { min, max, step } = SETTINGS.size;
+  return Number.isInteger(v) && v >= min && v <= max && (v - min) % step === 0;
+}
+
+/** 드롭다운에 보여 줄 크기 목록(settings.js의 listStep 간격). */
 function sizeChoices() {
-  const { min, max, step } = SETTINGS.size, choices = [];
-  for (let v = min; v <= max; v += step) choices.push(v);
+  const { min, max, listStep } = SETTINGS.size, choices = [];
+  for (let v = min; v <= max; v += listStep) choices.push(v);
   return choices;
 }
 
-/** 결과 크기(정사각형, 범위는 settings.js). 고르면 바로 다시 그린다. 도트화·AI 보정 탭이 같은 크기를 쓴다. */
+/** 결과 크기(정사각형, 범위·간격은 settings.js). 드롭다운으로 10px 단위로 고르거나, 옆 칸에 숫자를 직접 넣고 Enter(1px 단위).
+ *  어느 쪽으로 바꿔도 바로 다시 그린다. 도트화·AI 보정 탭이 같은 크기를 쓴다. */
 function sizeControl(off = false) {
-  const select = el('select', { disabled: off || Boolean(state.busy), onchange: event => { state.width = state.height = event.target.value; store.set('size', Number(event.target.value)); state.notice = null; resize(); } },
-    ...sizeChoices().map(v => el('option', { value: String(v), textContent: `${v}×${v}`, selected: String(v) === state.width })));
-  select.setAttribute('aria-label', '결과 크기');
-  return labelled('결과 크기', select);
+  const { min, max, step } = SETTINGS.size, current = Number(state.width), disabled = off || Boolean(state.busy);
+  const choices = sizeChoices();
+  const apply = wanted => {
+    if (!Number.isFinite(wanted)) { input.value = state.width; return; }
+    const size = Math.min(max, Math.max(min, min + Math.round((wanted - min) / step) * step));
+    input.value = String(size);
+    syncList(size);
+    up.disabled = disabled || size >= max;
+    down.disabled = disabled || size <= min;
+    if (String(size) === state.width) return;
+    state.width = state.height = String(size); store.set('size', size); state.notice = null; resize();
+  };
+  // 그림이 없으면 화면을 다시 그리지 않으므로, 드롭다운 표시는 여기서 바로 맞춘다.
+  const custom = v => el('option', { className: 'custom', value: String(v), textContent: `직접 입력 (${v}×${v})` });
+  const syncList = v => {
+    select.querySelector('option.custom')?.remove();
+    if (!choices.includes(v)) select.prepend(custom(v));
+    select.value = String(v);
+  };
+  // 목록에 없는 크기(직접 넣은 값)면 맨 위에 그 크기를 '직접 입력'으로 보여 준다.
+  const select = el('select', { disabled, onchange: event => apply(Number(event.target.value)) },
+    ...(choices.includes(current) ? [] : [Object.assign(custom(current), { selected: true })]),
+    ...choices.map(v => el('option', { value: String(v), textContent: `${v}×${v}`, selected: v === current })));
+  select.setAttribute('aria-label', '결과 크기 목록');
+  const input = el('input', { type: 'number', min, max, step, value: String(current), disabled,
+    onchange: () => apply(input.value === '' ? NaN : Number(input.value)) });
+  input.onkeydown = event => { if (event.key === 'Enter') input.blur(); };
+  input.setAttribute('aria-label', '결과 크기 직접 입력(가로·세로 px)');
+  input.title = `${min} ~ ${max} 사이 숫자를 넣고 Enter. 키보드 ↑↓로 ${step}씩 바꿀 수 있습니다. 가로·세로가 같은 정사각형입니다.`;
+  // 마우스로 1px씩 올리고 내리는 화살표(입력 칸 오른쪽에 위·아래로)
+  const up = el('button', { type: 'button', textContent: '▲', disabled: disabled || current >= max, onclick: () => apply(Number(state.width) + step) });
+  const down = el('button', { type: 'button', textContent: '▼', disabled: disabled || current <= min, onclick: () => apply(Number(state.width) - step) });
+  up.setAttribute('aria-label', '결과 크기 1 늘리기');
+  down.setAttribute('aria-label', '결과 크기 1 줄이기');
+  return labelled('결과 크기', el('span', { className: 'size-input' }, select, el('span', { className: 'size-side', textContent: '직접' }), input,
+    el('span', { className: 'size-arrows' }, up, down)));
 }
 
 /** 모든 도트화 방식 공통 마무리 설정. */
@@ -779,7 +826,7 @@ function helpScreen() {
     section('시작하기', list([
       '<b>이미지 열기…</b>를 누르거나 이미지를 창에 끌어다 놓습니다. <kbd>Ctrl</kbd>+<kbd>O</kbd> · 캡처한 그림은 <kbd>Ctrl</kbd>+<kbd>V</kbd>로 바로 붙여넣을 수 있습니다(맥은 <kbd>⌘</kbd>).',
       '<b>여러 장 한꺼번에</b>: 이미지를 여러 장 고르거나 끌어다 놓으면, 저장할 폴더를 묻고 지금 설정·크기·저장 배율로 모두 도트화해 그 폴더에 저장합니다.',
-      `<b>결과 크기</b>: ${SETTINGS.size.min}×${SETTINGS.size.min} ~ ${SETTINGS.size.max}×${SETTINGS.size.max}(${SETTINGS.size.step}px 단위)에서 고르면 바로 다시 그립니다. 배경은 자동으로 지우고 캐릭터를 캔버스에 맞춥니다.`,
+      `<b>결과 크기</b>: ${SETTINGS.size.min}×${SETTINGS.size.min} ~ ${SETTINGS.size.max}×${SETTINGS.size.max}의 정사각형입니다. 드롭다운에서 ${SETTINGS.size.listStep}px 단위로 고르거나, 옆 칸에 숫자를 직접 넣고 Enter를 누르면(${SETTINGS.size.step}px 단위) 바로 다시 그립니다. 배경은 자동으로 지우고 캐릭터를 캔버스에 맞춥니다.`,
       '<b>도트화</b> 탭: 설정을 바꾸면 바로 다시 계산합니다. 계산 중에도 설정을 바꿀 수 있고, 마지막 설정으로 결과가 나옵니다.',
       '<b>PNG 저장…</b>: 지금 탭의 결과를 저장합니다. <kbd>Ctrl</kbd>+<kbd>S</kbd> · 저장 배율(1·2·4·8배)은 번짐 없이 키웁니다.',
       '<b>복사</b>: 지금 탭의 결과를 저장 배율대로 클립보드에 복사합니다. <kbd>Ctrl</kbd>+<kbd>C</kbd>',

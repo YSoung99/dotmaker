@@ -1,5 +1,6 @@
 // 도트메이커 설치형 프로그램 본체. 화면은 dist/도트메이커.html을 그대로 띄우고,
 // 브라우저에서 막히는 JEV(LLM Gateway) 요청만 여기서 대신 보낸다. API 키는 운영체제 암호화 저장소로 보관한다.
+// 업데이트(윈도우·리눅스 AppImage)도 여기서 확인하고 받는다.
 const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -48,6 +49,96 @@ ipcMain.handle('batch:write', (_event, name, png) => {
   return true;
 });
 
+// ───────────── 업데이트
+// 켤 때마다 깃허브 릴리스를 확인해, 새 버전이 있으면 지금 할지 묻는다(없거나 인터넷이 안 되면 조용히 넘어감).
+// '지금 업데이트'를 고르면 뒤에서 받고, 다 받으면 설치 창 없이 바로 설치한 뒤 다시 켠다.
+// 윈도우 설치판·리눅스 AppImage·deb는 electron-updater, 맥은 서명 없는 앱이라 mac-updater.cjs가 직접 바꾼다.
+// 그 밖(리눅스에서 압축을 풀어 켠 경우 등)은 화면 위쪽 받기 링크를 쓴다.
+const RELEASES = (() => { const { owner, repo } = require('../package.json').build.publish; return { owner, repo, page: `https://github.com/${owner}/${repo}/releases/latest` }; })();
+function linuxPackage() {
+  if (process.env.APPIMAGE) return 'appimage';
+  try { return fs.readFileSync(path.join(process.resourcesPath, 'package-type'), 'utf8').trim(); } catch { return null; }
+}
+const canAutoUpdate = () => app.isPackaged && (process.platform === 'win32' || process.platform === 'darwin'
+  || (process.platform === 'linux' && ['appimage', 'deb'].includes(linuxPackage())));
+let updater = null;
+let updateState = 'idle';  // idle · checking · downloading · ready
+let manualCheck = false;   // 사용자가 직접 '업데이트 확인'을 눌렀으면 결과(최신·오류)도 알려 준다
+
+function mainWindow() { return BrowserWindow.getAllWindows()[0] ?? null; }
+function ask(options) { const window = mainWindow(); return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options); }
+
+function setupUpdater() {
+  if (!canAutoUpdate()) return;
+  if (process.platform === 'darwin') {
+    const { MacUpdater } = require('./mac-updater.cjs');
+    updater = new MacUpdater(RELEASES);
+  } else {
+    ({ autoUpdater: updater } = require('electron-updater'));
+  }
+  updater.autoDownload = false;          // 받기 전에 먼저 묻는다
+  updater.autoInstallOnAppQuit = true;   // 받아 두고 '나중에'를 고르면 끌 때 설치
+  // 시험용: DOTMAKER_UPDATE_URL을 주면 그 주소(latest.yml이 있는 폴더)에서 확인한다.
+  if (process.env.DOTMAKER_UPDATE_URL) updater.setFeedURL({ provider: 'generic', url: process.env.DOTMAKER_UPDATE_URL });
+
+  updater.on('update-available', async info => {
+    const { response } = await ask({
+      type: 'info', buttons: ['지금 업데이트', '나중에'], defaultId: 0, cancelId: 1,
+      title: '새 버전', message: `도트메이커 ${info.version}이(가) 나왔습니다. 지금 업데이트할까요?`,
+      detail: `지금 버전: ${app.getVersion()}\n받는 동안 계속 쓸 수 있고, 다 받으면 바로 설치한 뒤 다시 켭니다.`
+        + (linuxPackage() === 'deb' && process.platform === 'linux' ? '\n설치할 때 컴퓨터 암호를 한 번 묻습니다.' : ''),
+    });
+    manualCheck = false;
+    if (response !== 0) { updateState = 'idle'; return; }
+    updateState = 'downloading';
+    updater.downloadUpdate().catch(error => updateFailed(error, true));
+  });
+  updater.on('update-not-available', () => {
+    updateState = 'idle';
+    if (manualCheck) ask({ type: 'info', buttons: ['확인'], title: '업데이트 확인', message: `최신 버전입니다 (${app.getVersion()}).` });
+    manualCheck = false;
+  });
+  updater.on('download-progress', progress => mainWindow()?.setProgressBar(progress.percent / 100));
+  updater.on('update-downloaded', async info => {
+    updateState = 'ready';
+    mainWindow()?.setProgressBar(-1);
+    const { response } = await ask({
+      type: 'info', buttons: ['지금 다시 켜기', '끌 때 설치'], defaultId: 0, cancelId: 1,
+      title: '업데이트 준비 완료', message: `도트메이커 ${info.version}을(를) 다 받았습니다.`,
+      detail: '지금 다시 켜면 바로 새 버전으로 바뀝니다. 작업 중이면 \'끌 때 설치\'를 고르세요.',
+    });
+    if (response === 0) setImmediate(() => updater.quitAndInstall(true, true));  // 설치 창 없이, 설치 뒤 다시 켜기
+  });
+  updater.on('error', error => updateFailed(error, updateState === 'downloading'));
+}
+
+function updateFailed(error, loud) {
+  console.error('업데이트 실패:', error);
+  mainWindow()?.setProgressBar(-1);
+  const wasManual = manualCheck;
+  updateState = 'idle';
+  manualCheck = false;
+  if (!loud && !wasManual) return;
+  ask({ type: 'warning', buttons: ['릴리스에서 받기', '닫기'], defaultId: 0, cancelId: 1, title: '업데이트',
+    message: '업데이트를 확인하거나 받지 못했습니다.',
+    detail: `${error?.message ?? error}\n\n인터넷 연결을 확인한 뒤 다시 해 보거나, 릴리스 페이지에서 새 버전을 받아 직접 설치하세요.` })
+    .then(({ response }) => { if (response === 0) shell.openExternal(RELEASES.page); });
+}
+
+function checkForUpdates(manual) {
+  if (!updater || updateState !== 'idle') {
+    if (manual && updateState === 'downloading') ask({ type: 'info', buttons: ['확인'], title: '업데이트', message: '새 버전을 받는 중입니다.' });
+    if (manual && updateState === 'ready') updater.quitAndInstall(true, true);
+    return;
+  }
+  manualCheck = manual;
+  updateState = 'checking';
+  updater.checkForUpdates().catch(error => updateFailed(error, false));
+}
+
+ipcMain.handle('update:supported', () => Boolean(updater));
+ipcMain.handle('update:check', () => { checkForUpdates(true); return true; });
+
 function createWindow() {
   const window = new BrowserWindow({
     width: 1100, height: 800, minWidth: 760, minHeight: 560,
@@ -67,7 +158,10 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  setupUpdater();
   createWindow();
+  // 창이 뜨고 조금 뒤에 확인한다(켜는 속도에 영향 없게).
+  if (updater) setTimeout(() => checkForUpdates(false), 3000);
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

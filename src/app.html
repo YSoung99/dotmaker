@@ -48,7 +48,7 @@ body {
   min-width: 320px;
 }
 button, input, select { font: inherit; color: inherit; }
-button, select, input[type=text] {
+button, select, input[type=text], input[type=number] {
   background: var(--control);
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -60,6 +60,13 @@ button:hover:not(:disabled), select:hover:not(:disabled) { background: var(--con
 button:disabled, input:disabled, select:disabled { opacity: .45; cursor: default; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 input[type=text] { width: 64px; text-align: center; padding: 5px 6px; }
+input[type=number] { width: 64px; text-align: center; padding: 5px 6px; }
+.size-input { display: inline-flex; align-items: center; gap: 6px; }
+.size-side { color: var(--muted); }
+.size-input input[type=number] { -moz-appearance: textfield; }
+.size-input input[type=number]::-webkit-inner-spin-button, .size-input input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.size-arrows { display: inline-flex; flex-direction: column; gap: 2px; }
+.size-arrows button { min-height: 0; height: 15px; width: 24px; padding: 0; font-size: 9px; line-height: 1; border-radius: 4px; }
 .primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
 .primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.06); }
 .muted { color: var(--muted); }
@@ -70,6 +77,7 @@ input[type=text] { width: 64px; text-align: center; padding: 5px 6px; }
 .brand { font-weight: 700; letter-spacing: -.01em; }
 .brand small { font-weight: 400; color: var(--muted); margin-left: 6px; }
 .update { font-weight: 600; white-space: nowrap; color: var(--focus); margin-left: 10px; }
+.update-check { margin-left: 10px; min-height: 24px; padding: 1px 8px; font-size: 12px; }
 
 .tabs { display: flex; gap: 4px; padding: 14px 20px 0; border-bottom: 1px solid var(--line); }
 .tabs button { border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; background: transparent; padding: 7px 18px; margin-bottom: -1px; }

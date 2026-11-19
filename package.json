@@ -1,7 +1,7 @@
 {
   "name": "dotmaker",
   "productName": "도트메이커",
-  "version": "3.9.3",
+  "version": "3.10.0",
   "description": "캐릭터 그림을 원본 그대로 살린 도트 그림으로 바꾸는 프로그램",
   "author": "YSoung99",
   "license": "MIT",
@@ -13,7 +13,7 @@
     "build": "node tools/build.mjs",
     "start": "node tools/build.mjs && electron .",
     "dist:win": "node tools/build.mjs && electron-builder --win nsis --x64 --publish never",
-    "dist:mac": "node tools/build.mjs && electron-builder --mac dmg --arm64 --publish never -c.productName=DotMaker",
+    "dist:mac": "node tools/build.mjs && electron-builder --mac dmg zip --arm64 --publish never -c.productName=DotMaker",
     "dist:linux": "node tools/build.mjs && electron-builder --linux AppImage deb --x64 --publish never -c.productName=DotMaker",
     "dist": "npm run dist:win && npm run dist:mac && npm run dist:linux"
   },
@@ -39,7 +39,10 @@
       "shortcutName": "도트메이커"
     },
     "mac": {
-      "target": "dmg",
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "category": "public.app-category.graphics-design",
       "identity": null
     },
@@ -54,6 +57,12 @@
       "maintainer": "YSoung99 <99796713+YSoung99@users.noreply.github.com>"
     },
     "icon": "desktop/icons/icon.png",
+    "publish": {
+      "provider": "github",
+      "owner": "YSoung99",
+      "repo": "dotmaker",
+      "releaseType": "release"
+    },
     "electronLanguages": [
       "ko",
       "en",
@@ -63,5 +72,8 @@
   "devDependencies": {
     "electron": "45.2.3",
     "electron-builder": "26.18.0"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.11"
   }
 }
