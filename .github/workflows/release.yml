@@ -37,6 +37,11 @@ jobs:
       - run: npm run ${{ matrix.script }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Electron 미리보기에서 테두리 겹침 확인
+        run: npm exec --no -- electron test/outline-smoke.cjs
+      - name: 윈도우 EXE 설치 및 실행 확인
+        if: runner.os == 'Windows'
+        run: node test/windows-install-smoke.cjs
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.os }}
@@ -47,6 +52,7 @@ jobs:
             release/*.zip
             release/*.blockmap
             release/latest*.yml
+            release/beta*.yml
 
   publish:
     needs: build
@@ -72,4 +78,9 @@ jobs:
       - name: 깃허브 릴리스 올리기
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" out/* --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
+        run: |
+          release_flags=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            release_flags+=(--prerelease --latest=false)
+          fi
+          gh release create "$GITHUB_REF_NAME" out/* --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag "${release_flags[@]}"

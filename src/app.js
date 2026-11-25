@@ -743,6 +743,35 @@ function sizeControl(off = false) {
     el('span', { className: 'size-arrows' }, up, down)));
 }
 
+function outlineStackControl(off) {
+  const disabled = off || state.settings.hardEdge || Boolean(state.operation);
+  const value = outlineStackLayers(state.settings.outlineStack) / 10;
+  const bounds = { min: 0, max: 100, step: 0.1, value: String(value), disabled };
+  const count = el('span', { className: 'muted' });
+  const slider = el('input', { ...bounds, type: 'range', ariaLabel: '검정 테두리 겹침 슬라이더' });
+  const number = el('input', { ...bounds, type: 'number', ariaLabel: '검정 테두리 겹침 퍼센트' });
+  const updateCount = percent => {
+    const layers = outlineStackLayers(percent);
+    count.textContent = layers ? `${layers}장 겹침` : '원본 그대로';
+  };
+  const apply = percent => {
+    if (!Number.isFinite(percent)) { number.value = String(value); return; }
+    const next = outlineStackLayers(percent) / 10;
+    number.value = slider.value = String(next);
+    updateCount(next);
+    if (next !== value) setSetting('outlineStack', next);
+  };
+  slider.oninput = () => { number.value = slider.value; updateCount(slider.valueAsNumber); };
+  slider.onchange = () => apply(slider.valueAsNumber);
+  number.onchange = () => apply(number.valueAsNumber);
+  number.onkeydown = event => { if (event.key === 'Enter') number.blur(); };
+  updateCount(value);
+  return el('div', { className: 'field', title: state.settings.hardEdge
+    ? '가장자리 반투명 없애기를 끄면 겹침을 조절할 수 있습니다.'
+    : '바깥쪽 반투명 검정 계열만 제자리에서 겹칩니다. 1%는 10장, 50%는 500장입니다.' },
+    el('span', { textContent: '검정 테두리 겹침' }), slider, number, el('span', { textContent: '%' }), count);
+}
+
 /** 모든 도트화 방식 공통 마무리 설정. */
 function finishRow(off) {
   const s = state.settings;
@@ -758,7 +787,7 @@ function finishRow(off) {
       '테두리의 반투명 칸을 절반 이상 덮였으면 불투명, 아니면 투명으로 딱 자릅니다. 색 배경 위에 올려도 테두리가 흐리지 않습니다.'),
     toggle('외톨이 점 정리', s.lonePixels, v => setSetting('lonePixels', v), off,
       '둘레 어느 칸과도 색이 크게 다른 한 칸짜리 점을 둘레 색으로 바꿉니다. 선과 눈 하이라이트는 두지만, 작은 장식 점이 사라질 수 있습니다.'),
-    labelled('팔레트 고정', palette), custom);
+    labelled('팔레트 고정', palette), custom, outlineStackControl(off));
 }
 
 function controls(stage) {

@@ -413,7 +413,7 @@ export function reduce(subject, w, h) {
 // softLines: 원본 색 살림에서 선을 1픽셀로 정리(원본에서 선 줄기 찾기) · softVivid: 원본 색 살림에서 채도 25% 올리기
 // softClean: 원본 색 살림에서 바깥 테두리를 순검정 1px로 잇고 색 면 정리(비슷한 색 합치기·혼자 떨어진 점 지우기)
 export const defaultSettings = () => ({ width: 1, boundary: true, transparency: 80, colors: 12, cleanup: 1, method: 'faithful', aiLines: false, softColors: 24, softLines: true, softVivid: true, softClean: true, crispOutline: false, cleanBlends: false, snapColors: false, preserveMouth: false, upscale: 'auto',
-  sharpCells: false, hardEdge: false, lonePixels: false, keepAccents: false, palette: 'off', paletteCustom: '' });
+  sharpCells: false, hardEdge: false, outlineStack: 0, lonePixels: false, keepAccents: false, palette: 'off', paletteCustom: '' });
 
 class Palette {
   constructor(pixels) {
@@ -2141,6 +2141,31 @@ export function hardEdge(input) {
   return output;
 }
 
+export function outlineStackLayers(percent) {
+  return Number.isFinite(percent) ? Math.round(Math.max(0, Math.min(100, percent)) * 10) : 0;
+}
+
+/** 바깥 배경으로 이어진 반투명 검정 계열 픽셀의 알파만 겹쳐 올린다. */
+export function stackDarkOutline(input, layers) {
+  if (layers <= 1) return input;
+  const { grid, px } = input;
+  const exterior = new Uint8Array(grid.count), queue = [];
+  const visit = i => {
+    if (exterior[i] || A(px[i]) === 255) return;
+    exterior[i] = 1;
+    queue.push(i);
+  };
+  for (let i = 0; i < grid.count; i++) if (grid.edge(i)) visit(i);
+  const alpha = Array.from({ length: 256 }, (_, a) => Math.round(255 * (1 - (1 - a / 255) ** layers)));
+  const output = input.clone();
+  for (let head = 0; head < queue.length; head++) {
+    const i = queue[head], p = px[i];
+    grid.each4(i, visit);
+    if (A(p) > 0 && light(p) <= 90 && chroma(p) <= 32) output.px[i] = withAlpha(p, alpha[A(p)]);
+  }
+  return output;
+}
+
 /**
  * 외톨이 점 정리: 둘레 어느 칸과도 색이 크게 다른 한 칸짜리 점을 둘레에서 가장 많은 색으로 바꾼다.
  * 선(어두운 칸)과, 어두운 칸에 둘러싸인 밝은 점(눈 하이라이트)은 건드리지 않는다.
@@ -2195,12 +2220,13 @@ export function lockPalette(input, colors) {
   return output;
 }
 
-/** 모든 방식 공통 마무리: 외톨이 점 정리 → 팔레트 고정 → 가장자리 반투명 없애기. */
+/** 모든 방식 공통 마무리: 외톨이 점과 팔레트 정리 뒤에 가장자리 알파를 처리한다. */
 function finishDot(result, settings) {
   let image = result.image;
   if (settings.lonePixels) image = lonePixels(image);
   if (settings.palette && settings.palette !== 'off') image = lockPalette(image, paletteColors(settings));
   if (settings.hardEdge) image = hardEdge(image);
+  else image = stackDarkOutline(image, outlineStackLayers(settings.outlineStack));
   return image === result.image ? result : { ...result, image };
 }
 export function render(subject, reduced, settings, lines = null, whole = false) {
@@ -2215,7 +2241,9 @@ function renderMethod(subject, reduced, settings, lines, whole) {
   return settings.method === 'basic' || settings.method === 'direct' ? renderBasic(reduced, settings, guide) : renderBerry(subject, w, h, settings, guide, whole);
 }
 export function dotStatus(settings, dotted) {
-  const done = [settings.lonePixels && '외톨이 점 정리', settings.palette && settings.palette !== 'off' && paletteColors(settings).length > 0 && '팔레트 고정', settings.hardEdge && '가장자리 또렷'].filter(Boolean);
+  const layers = outlineStackLayers(settings.outlineStack);
+  const done = [settings.lonePixels && '외톨이 점 정리', settings.palette && settings.palette !== 'off' && paletteColors(settings).length > 0 && '팔레트 고정',
+    settings.hardEdge && '가장자리 또렷', !settings.hardEdge && layers > 1 && `검정 테두리 ${layers}장 겹침`].filter(Boolean);
   return methodStatus(settings, dotted) + (done.length ? '  ·  ' + done.join(' · ') : '');
 }
 function methodStatus(settings, dotted) {
