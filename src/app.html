@@ -95,6 +95,8 @@ main { flex: 1; display: flex; min-height: 0; background: var(--panel); }
 .spacer { flex: 1; }
 .field { display: flex; align-items: center; gap: 8px; }
 .note { margin: 0; color: var(--muted); font-size: 12.5px; }
+.lab2 { overflow-y: auto; }
+.lab2 input[type=number] { width: 78px; }
 .toggle { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
 .toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
 
@@ -214,12 +216,16 @@ input.wide { width: min(520px, 100%); text-align: left; }
   <button type="button" role="tab" data-stage="dot">도트화</button>
   <button type="button" role="tab" data-stage="repair">AI 보정</button>
   <button type="button" role="tab" data-stage="lab">실험 <small>베타</small></button>
+  <button type="button" role="tab" data-stage="lab2">실험실 2</button>
   <button type="button" role="tab" data-stage="help">설명서</button>
 </nav>
 <main id="panel" role="tabpanel"></main>
 <script type="text/plain" id="worker-src">
 /*AI*/
 /*WORKER*/
+</script>
+<script type="text/plain" id="lab2-worker-src">
+/*LAB2-WORKER*/
 </script>
 <script type="module" data-app>
 /*SHARED-START*/

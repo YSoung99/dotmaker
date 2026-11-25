@@ -7,6 +7,7 @@ const STAGES = {
     detail: '클라우드 AI(PixelLab·Gemini·OpenAI)에 캐릭터를 보내 도트 그림으로 다시 그립니다. 쓰려면 그 서비스의 내 API 키가 필요합니다.' },
   lab: { name: '실험', instruction: '도트 크기와 색 수만 골라 그림을 도트로 바꿉니다.',
     detail: '베타: 도트 크기와 색 수만 골라 그림을 도트로 바꿉니다. 배경 지우기를 끄면 그림 전체를 배경째 바꿉니다. 다른 탭의 결과에는 영향을 주지 않습니다.' },
+  lab2: { name: '실험실 2', instruction: '그림을 도트로 변환하거나 확대된 도트의 격자를 복원합니다.' },
   help: { name: '설명서' },
 };
 
@@ -49,6 +50,7 @@ const state = {
   aligned: null,    // 비교용 원본 그림(결과 칸에 맞춘 것). 그림이나 크기가 바뀌면 다시 만든다
   notice: null,     // 여러 장 저장·복사 결과 안내
   lab: labInitial(),  // 실험 탭(베타) — lab.js
+  lab2: lab2Initial(),
   retryWhole: null, // 캐릭터 분리에 실패한 파일(‘분리 없이 그대로 변환’ 버튼용)
   exportScale: [1, 2, 4, 8].includes(store.get('exportScale', 1)) ? store.get('exportScale', 1) : 1,
   chooseSaveLocation: store.get('chooseSaveLocation', true) !== false,
@@ -270,7 +272,7 @@ function applyOpened(data, original, name) {
 function openFiles(files) {
   const images = files.filter(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name));
   if (!images.length || state.busy) return;
-  if (state.stage === 'repair') loadTabFile(images[0], 'repair');
+  if (state.stage === 'lab2' || state.stage === 'repair') loadTabFile(images[0], state.stage);
   else if (images.length > 1) (state.stage === 'lab' ? labBatch : batch)(images);
   else if (state.stage === 'lab') loadTabFile(images[0], 'lab');
   else open(images[0]);
@@ -372,6 +374,7 @@ function redot() {
 
 function result(stage = state.stage) {
   if (stage === 'lab') return state.lab.result;
+  if (stage === 'lab2') return state.lab2.results[state.lab2.mode]?.picture ?? null;
   if (stage === 'repair' && !state.product) return state.cloud.result?.final ?? null;
   if (!state.product) return null;
   if (stage === 'reduce') return state.product.reduced;
@@ -498,7 +501,7 @@ async function save() {
   const picture = result();
   if (!picture || state.busy) return;
   const scale = state.exportScale;
-  const input = state.stage === 'lab' ? state.lab.input : state.stage === 'repair' ? state.cloud.input : null;
+  const input = state.stage === 'lab' ? state.lab.input : state.stage === 'lab2' ? state.lab2.input : state.stage === 'repair' ? state.cloud.input : null;
   const name = outputName(input?.name ?? state.fileName, state.stage, picture, scale);
   const nativeSave = Boolean(desktop?.saveResultPNG);
   if (nativeSave) {
@@ -821,6 +824,7 @@ function finishRow(off) {
 function controls(stage) {
   if (stage === 'repair') return cloudControls();
   if (stage === 'lab') return labControls();
+  if (stage === 'lab2') return lab2Controls();
   const loaded = Boolean(state.product);
   const sizeRow = row(sizeControl(), upscaleControl());
   if (stage === 'dot') {
@@ -977,6 +981,8 @@ function statusLine(stage) {
     status.textContent = state.cloud.result.status;
   } else if (stage === 'lab' && state.lab.result) {
     status.textContent = state.lab.status;
+  } else if (stage === 'lab2') {
+    status.textContent = state.lab2.results[state.lab2.mode]?.status ?? '';
   }
   return status;
 }
@@ -984,8 +990,11 @@ function statusLine(stage) {
 function screen(stage) {
   if (stage === 'help') return helpScreen();
   const guide = (stage === 'dot' && DOT_GUIDES[state.settings.method]) || STAGES[stage];
-  const page = el('div', { className: 'screen' }, el('p', { className: 'muted guide' }, guide.instruction, guide.detail && tip(guide.detail)), controls(stage));
-  if (stage === 'lab' && labSource()) {
+  const page = el('div', { className: stage === 'lab2' ? 'screen lab2' : 'screen' }, el('p', { className: 'muted guide' }, guide.instruction, guide.detail && tip(guide.detail)), controls(stage));
+  if (stage === 'lab2') {
+    const content = lab2Preview();
+    if (content) page.append(content);
+  } else if (stage === 'lab' && labSource()) {
     page.append(el('div', { className: 'previews' }, preview('원본', labSource(), false), preview('결과', state.lab.result, true)));
   } else if (stage === 'repair' && (state.product || state.cloud.input)) {
     const r = state.cloud.result, input = state.cloud.input;
@@ -1135,7 +1144,7 @@ function update() {
   if (state.stage === 'lab' && !state.lab.result && !state.operation) labRun();
   $('open').disabled = Boolean(state.busy);
   $('scale').disabled = Boolean(state.operation);
-  $('file-name').textContent = state.fileName ?? '';
+  $('file-name').textContent = (state.stage === 'lab2' ? state.lab2.input?.name : state.fileName) ?? '';
   $('save').disabled = $('copy').disabled = !result() || Boolean(state.busy);
   if (desktop?.saveResultPNG) {
     const choose = state.chooseSaveLocation;
@@ -1224,7 +1233,8 @@ async function loadTabFile(file, stage) {
   update();
   try {
     const picture = await loadPictureFile(file);
-    if (stage === 'lab') setLabInput(picture, file.name);
+    if (stage === 'lab2') { lab2SetInput(picture, file.name); state.notice = null; }
+    else if (stage === 'lab') setLabInput(picture, file.name);
     else setCloudInput(picture, file.name);
   } catch (error) {
     state.error = error.message;

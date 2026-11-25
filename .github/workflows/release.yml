@@ -37,7 +37,7 @@ jobs:
       - run: npm run ${{ matrix.script }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      - name: Electron 미리보기에서 테두리 겹침 확인
+      - name: Electron에서 테두리 겹침과 실험실 2 확인
         run: npm exec --no -- electron test/outline-smoke.cjs
       - name: 윈도우 EXE 설치 및 실행 확인
         if: runner.os == 'Windows'
