@@ -55,8 +55,19 @@ ipcMain.handle('batch:pickFolder', async event => {
 });
 ipcMain.handle('batch:write', (_event, name, png) => {
   if (!batchFolder) throw new Error('저장할 폴더를 고르지 않았습니다.');
-  fs.writeFileSync(path.join(batchFolder, path.basename(String(name))), Buffer.from(png));
-  return true;
+  const filename = path.basename(String(name));
+  const ext = path.extname(filename);
+  const stem = path.basename(filename, ext);
+  const bytes = Buffer.from(png);
+  for (let index = 1; ; index++) {
+    const candidate = index === 1 ? filename : `${stem}-${index}${ext}`;
+    try {
+      fs.writeFileSync(path.join(batchFolder, candidate), bytes, { flag: 'wx' });
+      return candidate;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+  }
 });
 
 // ───────────── 업데이트

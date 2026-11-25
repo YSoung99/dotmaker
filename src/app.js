@@ -56,7 +56,10 @@ const state = {
   jev: null,        // JEV 결과 창 { focus, rows, picks, base } 또는 키 설정 창 { settings: true }
   jevApplied: false,
   fileName: null,
-  busy: null,
+  workerBusy: null,
+  operation: null,
+  get busy() { return this.workerBusy ?? this.operation; },
+  set busy(label) { this.workerBusy = label; },
   error: null,
   aiFiles: null,    // 저장된 AI 파일 id 목록(설명서 탭)
   aiMessage: '',
@@ -108,7 +111,10 @@ const engine = (() => {
     worker.onerror = event => {
       event.preventDefault();
       state.error = `${Errors.render} (${event.message})`;
+      const failed = waiting;
       waiting = [];
+      for (const job of failed) job.fail?.(state.error);
+      running?.fail?.(state.error);
       if (running) done(); else update();
     };
   }
@@ -116,7 +122,9 @@ const engine = (() => {
     submit(type, payload, label, apply, fail) {
       if (!worker) { state.error = '이 브라우저에서 작업자를 시작하지 못했습니다. 크롬·엣지 최신 버전으로 열어 주세요.'; update(); fail?.(state.error); return; }
       const drops = { open: ['open', 'resize', 'redot'], resize: ['resize', 'redot'], redot: ['redot'], lab: ['lab'] }[type] ?? [];
+      const cancelled = waiting.filter(job => drops.includes(job.type));
       waiting = waiting.filter(job => !drops.includes(job.type));
+      for (const job of cancelled) job.fail?.('새 작업이 들어와 대기 중이던 작업을 취소했습니다.');
       waiting.push({ id: nextId++, type, payload, label, apply, fail });
       if (running) { state.busy = label; updateStatus(); }
       pump();
@@ -250,13 +258,33 @@ function applyOpened(data, original, name) {
 /** 한 장이면 열고, 여러 장이면 지금 설정으로 모두 바꿔 고른 폴더에 저장한다(실험 탭에서는 실험 탭 설정으로). */
 function openFiles(files) {
   const images = files.filter(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name));
-  if (images.length > 1) (state.stage === 'lab' ? labBatch : batch)(images); else open(images[0]);
+  if (!images.length || state.busy) return;
+  if (state.stage === 'repair') loadTabFile(images[0], 'repair');
+  else if (images.length > 1) (state.stage === 'lab' ? labBatch : batch)(images);
+  else if (state.stage === 'lab') loadTabFile(images[0], 'lab');
+  else open(images[0]);
+}
+
+async function pickBatchFolder() {
+  if (!desktop?.pickFolder) return null;
+  state.operation = '저장할 폴더 선택 중';
+  update();
+  try {
+    const folder = await desktop.pickFolder();
+    if (folder) return folder;
+  } catch (error) {
+    console.error(error);
+    state.error = '저장할 폴더를 열지 못했습니다.';
+  }
+  state.operation = null;
+  update();
+  return null;
 }
 
 async function batch(files) {
   const size = dimensions();
   if (!size || state.busy) return;
-  const folder = await desktop?.pickFolder?.();
+  const folder = await pickBatchFolder();
   if (!folder) return;
   const settings = { ...state.settings }, scale = state.exportScale, failed = [];
   let saved = 0;
@@ -264,7 +292,7 @@ async function batch(files) {
   for (const [k, file] of files.entries()) {
     const label = `여러 장 도트화 중 (${k + 1}/${files.length}) · ${file.name}`;
     try {
-      state.busy = label; state.error = null; update();
+      state.operation = label; state.error = null; update();
       const original = await decode(file);
       submittedSettings = settings;
       const data = await engine.request('open', { original, w: size[0], h: size[1], settings }, label);
@@ -278,7 +306,7 @@ async function batch(files) {
       failed.push(file.name);
     }
   }
-  state.busy = null;
+  state.operation = null;
   state.error = null;
   state.notice = `여러 장 도트화: ${saved}장을 '${folder}' 폴더에 저장했습니다` + (failed.length ? ` · 실패 ${failed.length}장 (${failed.join(', ')})` : '');
   update();
@@ -286,7 +314,7 @@ async function batch(files) {
 
 /** whole: 캐릭터 분리(배경 지우기)를 건너뛰고 그림 전체를 그대로 변환한다. */
 async function open(file, whole = false) {
-  if (!file) return;
+  if (!file || state.busy) return;
   const size = dimensions();
   if (!size) return;
   state.notice = null;
@@ -322,9 +350,13 @@ function resize() {
 function redot() {
   if (!state.product || JSON.stringify(submittedSettings) === JSON.stringify(state.settings)) return;
   const settings = { ...state.settings };
-  const label = settings.aiLines && settings.method !== 'soft' && !submittedSettings.aiLines ? '선 추출 AI가 원본의 선을 읽는 중' : '외곽선 정리 중';
+  const label = settings.aiLines && settings.method !== 'soft' && !submittedSettings?.aiLines ? '선 추출 AI가 원본의 선을 읽는 중' : '외곽선 정리 중';
   submittedSettings = settings;
-  engine.submit('redot', { settings }, label, applyProduct);
+  engine.submit('redot', { settings }, label, data => {
+    applyProduct(data);
+    state.aligned = null;
+    if (state.compare) loadAligned();
+  });
 }
 
 function result(stage = state.stage) {
@@ -340,11 +372,12 @@ function result(stage = state.stage) {
 // ───────────── AI 보정(클라우드)
 /** PixelLab 다듬기: 지금 도트화 결과를 크기 그대로 보내 정리받는다. */
 async function runCorrect() {
+  if (state.busy) return;
   const before = state.cloud.input?.picture ?? state.product.dotted, strength = state.cloud.fix;
   if (before.w * before.h > 1024 * 1024) { state.error = 'PixelLab 다듬기는 1024×1024 넓이까지입니다. 더 작은 도트 그림을 넣어 주세요.'; update(); return; }
   if (!confirm(`${state.cloud.input ? `넣은 그림 '${state.cloud.input.name}'` : '지금 도트화 결과'}(${before.w}×${before.h})를 PixelLab(api.pixellab.ai)로 보내 다듬기를 합니다.\n요금: PixelLab이 정하며 결과에 표시됩니다 (내 API 키 계정에 청구)\n\n계속할까요?`)) return;
   state.cloud.result = null;
-  state.busy = `PixelLab이 다듬는 중 (강도 ${strength.toFixed(2)})`;
+  state.operation = `PixelLab이 다듬는 중 (강도 ${strength.toFixed(2)})`;
   state.error = null;
   update();
   try {
@@ -356,11 +389,12 @@ async function runCorrect() {
   } catch (error) {
     state.error = error instanceof CloudError ? error.message : `다듬기를 하지 못했습니다. (${error.message})`;
   }
-  state.busy = null;
+  state.operation = null;
   update();
 }
 
 function setCloud(key, value) {
+  if (state.operation) return;
   state.cloud[key] = value;
   if (['provider', 'faithful', 'strength', 'quality', 'model', 'mode', 'fix'].includes(key)) store.set('cloud.' + key, value);
   update();
@@ -376,23 +410,25 @@ async function runCloud() {
   if (!size) return;
   if (!confirm(`${input ? `넣은 그림 '${input.name}'` : '캐릭터 그림'}을(를) ${info.name}(${info.host})로 보내 AI 보정을 합니다.\n요금: ${info.price} (내 API 키 계정에 청구)\n\n계속할까요?`)) return;
   state.cloud.result = null;
+  state.operation = 'AI 보정 준비 중';
+  state.error = null;
+  update();
   try {
     const subject = input ? input.picture : (await engine.request('subject', {}, `${info.name}에 보낼 그림 준비 중`)).subject;
-    state.busy = `${info.name}가 그리는 중 (보통 몇 초~1분)`;
+    state.operation = `${info.name}가 그리는 중 (보통 몇 초~1분)`;
     state.error = null;
     update();
     const painted = await cloudPaint(id, await cloudKey.get(id), subject, size, state.cloud);
     const image = await decode(painted.blob);
     const ai = { w: image.w, h: image.h, bytes: Raster.fromPremultiplied(image.data, image.w, image.h).straightBytes() };
-    state.busy = null;
     const done = await engine.request('cloud', { image, w: size[0], h: size[1], settings: { ...state.settings }, pixel: painted.pixel },
       painted.pixel ? 'AI 도트 그림 배경 지우는 중' : 'AI 그림을 도트화하는 중');
     const cost = painted.cost !== null && painted.cost !== undefined ? ` · 이번 요금 $${Number(painted.cost).toFixed(4)}` : '';
     state.cloud.result = { ai, final: done.final, pixel: painted.pixel, status: `${info.name}${id === 'openai' ? ` ${state.cloud.model === 'flare' ? 'Flare' : 'Sunburst'} · 품질 ${{ low: '낮음', medium: '보통', high: '높음' }[state.cloud.quality]}` : ''} · ${done.status}${cost}` };
   } catch (error) {
-    state.busy = null;
     state.error = error instanceof CloudError ? error.message : `AI 보정을 하지 못했습니다. (${error.message})`;
   }
+  state.operation = null;
   update();
 }
 
@@ -421,8 +457,11 @@ async function loadAligned() {
   if (state.aligned || !state.product) return;
   const { w, h } = state.product.dotted;
   try {
-    const { subject } = await engine.request('subject', {}, '비교할 원본 준비 중');
-    const scale = Math.min((w - 4) / subject.w, (h - 4) / subject.h);
+    const method = state.settings.method, product = state.product;
+    const { subject } = await engine.request('subject', { faithful: method === 'faithful' }, '비교할 원본 준비 중');
+    if (state.product !== product || state.settings.method !== method) return;
+    const margin = method === 'soft' || method === 'berry' ? 0 : 4;
+    const scale = Math.min((w - margin) / subject.w, (h - margin) / subject.h);
     const sw = Math.max(1, Math.round(subject.w * scale)), sh = Math.max(1, Math.round(subject.h * scale));
     const k = Math.max(1, Math.round(1200 / Math.max(w, h)));
     const canvas = document.createElement('canvas');
@@ -448,11 +487,13 @@ function save() {
   const picture = result();
   if (!picture || state.busy) return;
   const scale = state.exportScale;
-  const name = outputName(state.fileName, state.stage, picture, scale);
+  const input = state.stage === 'lab' ? state.lab.input : state.stage === 'repair' ? state.cloud.input : null;
+  const name = outputName(input?.name ?? state.fileName, state.stage, picture, scale);
   writePNG(scaled(picture, scale), name).catch(error => { state.error = 'PNG를 저장하지 못했습니다.'; console.error(error); update(); });
 }
 
 function setSetting(key, value) {
+  if (state.operation) return;
   rememberSettings('dot');
   state.settings = { ...state.settings, [key]: value };
   store.set('settings', state.settings);
@@ -467,7 +508,7 @@ function setSetting(key, value) {
 const settingsHistory = { dot: { undo: [], redo: [] }, lab: { undo: [], redo: [] } };
 const HISTORY_LIMIT = 100;
 
-const settingsOf = tab => (tab === 'dot' ? { ...state.settings } : Object.fromEntries(LAB_KEYS.map(k => [k, state.lab[k]])));
+const settingsOf = tab => (tab === 'dot' ? { settings: { ...state.settings }, width: state.width, height: state.height } : Object.fromEntries(LAB_KEYS.map(k => [k, state.lab[k]])));
 
 /** 설정을 바꾸기 직전에 부른다. 새로 바꾸면 '다시 하기'할 것은 버린다. */
 function rememberSettings(tab) {
@@ -479,9 +520,18 @@ function rememberSettings(tab) {
 
 function restoreSettings(tab, saved) {
   if (tab === 'dot') {
-    state.settings = saved;
-    store.set('settings', saved);
+    const { settings, width, height } = saved;
+    const changedSize = width !== state.width || height !== state.height;
+    state.settings = settings;
+    state.width = width;
+    state.height = height;
+    store.set('settings', settings);
+    store.set('size', Number(width));
+    state.notice = null;
     state.jevApplied = false;
+    update();
+    if (changedSize) resize(); else redot();
+    return;
   } else {
     Object.assign(state.lab, saved);
     for (const k of LAB_KEYS) store.set('lab.' + k, state.lab[k]);
@@ -489,11 +539,11 @@ function restoreSettings(tab, saved) {
   }
   state.notice = null;
   update();
-  if (tab === 'dot') redot();
 }
 
 /** back: 되돌리기(아니면 다시 하기). 지금 탭이 도트화·실험이 아니거나 기록이 없으면 아무것도 안 한다. */
 function stepSettings(back) {
+  if (state.operation) return;
   const history = settingsHistory[state.stage];
   const from = back ? history?.undo : history?.redo;
   if (!from?.length) return;
@@ -627,7 +677,7 @@ const labelled = (text, control) => el('label', { className: 'field' }, el('span
 /** AI 업스케일(ESRGAN): 도트화 전에 원본을 4배로 키운다. 도트화·AI 보정 탭이 같은 설정을 쓴다. */
 function upscaleControl() {
   const control = labelled('AI 업스케일', segmented([['auto', '자동'], ['strong', '6B'], ['light', 'v3'], ['off', '끄기']],
-    state.settings.upscale, v => setSetting('upscale', v), false, 'AI 업스케일'));
+    state.settings.upscale, v => setSetting('upscale', v), Boolean(state.operation), 'AI 업스케일'));
   control.title = '도트화하기 전에 원본을 AI(Real-ESRGAN)로 4배 키워 흐린 선과 잡티를 정리합니다. 자동은 원본이 결과 크기의 4배보다 작을 때만 켭니다. 6B는 더 깔끔하고, v3는 더 빠릅니다.';
   return control;
 }
@@ -663,7 +713,8 @@ function sizeControl(off = false) {
     syncList(size);
     up.disabled = disabled || size >= max;
     down.disabled = disabled || size <= min;
-    if (String(size) === state.width) return;
+    if (String(size) === state.width || state.busy) return;
+    rememberSettings('dot');
     state.width = state.height = String(size); store.set('size', size); state.notice = null; resize();
   };
   // 그림이 없으면 화면을 다시 그리지 않으므로, 드롭다운 표시는 여기서 바로 맞춘다.
@@ -724,7 +775,7 @@ function controls(stage) {
         row(toggle('또렷하게(작은 크기용)', s.sharpCells, v => setSetting('sharpCells', v), off,
           '칸 색을 평균 내지 않고 선 색이나 면 색 하나로 고릅니다. 작은 결과 크기에서 눈·입·무늬가 회색으로 뭉개지는 것을 줄입니다. 큰 크기에서는 선이 거칠어질 수 있습니다.'),
         toggle('바깥 외곽선 1픽셀(원본 선 색)', s.crispOutline, v => setSetting('crispOutline', v), off,
-          '투명 배경 바로 앞 가장 바깥 칸만, 원본 그 자리에 선이 있으면 원본 선 색으로 칠하고 그 바깥의 흐린 칸을 지웁니다. 흰 외곽선 장식과 바닥 그림자는 그대로 둡니다.'),
+          '투명 배경 바로 앞 가장 바깥 칸만, 원본 그 자리에 선이 있으면 원본 선 색으로 칠하고 반투명과 흰 외곽선 장식, 바닥 그림자의 색과 투명도도 유지합니다.'),
         toggle('원본 색 맞추기', s.snapColors, v => setSetting('snapColors', v), off,
           '축소하면서 생긴 탁한 중간색 대신, 그 칸 원본에 실제로 있는 가장 가까운 색을 넣습니다.'),
         toggle('경계 섞인 색 정리', s.cleanBlends, v => setSetting('cleanBlends', v), off,
@@ -790,13 +841,10 @@ async function loadPictureFile(file) {
   const image = await decode(file);
   return { w: image.w, h: image.h, bytes: Raster.fromPremultiplied(image.data, image.w, image.h).straightBytes() };
 }
-function pickFile(onPicture) {
+function pickFile(stage) {
+  if (state.busy) return;
   const input = el('input', { type: 'file', accept: 'image/*' });
-  input.onchange = async () => {
-    const file = input.files[0];
-    try { if (file) onPicture(await loadPictureFile(file), file.name); }
-    catch (error) { state.error = error.message; update(); }
-  };
+  input.onchange = () => { if (input.files[0]) loadTabFile(input.files[0], stage); };
   input.click();
 }
 
@@ -811,7 +859,7 @@ function inputRow() {
   return row(el('span', { textContent: '보낼 그림:' }),
     el('span', { className: 'muted', textContent: c.input ? `넣은 그림 '${c.input.name}' (${c.input.picture.w}×${c.input.picture.h})`
       : state.product ? (correcting() ? '지금 도트화 결과' : '도트화 탭에서 연 이미지의 캐릭터') : '없음 — 이미지를 넣거나 열어 주세요' }),
-    el('button', { type: 'button', textContent: '다른 이미지 넣기…', disabled: busy, onclick: () => pickFile((picture, name) => setCloudInput(picture, name)) }),
+    el('button', { type: 'button', textContent: '다른 이미지 넣기…', disabled: busy, onclick: () => pickFile('repair') }),
     c.input && el('button', { type: 'button', textContent: '넣은 그림 빼기', disabled: busy, onclick: () => setCloudInput(null) }),
     tip('이 탭에 이미지를 끌어다 놓거나 붙여넣어도 됩니다.'));
 }
@@ -1026,7 +1074,9 @@ function updateStatus() {
 
 function update() {
   // 실험 탭은 결과가 비어 있으면 먼저 만든다(저장·복사 버튼 상태가 결과를 보고 정해지므로 맨 앞에서).
-  if (state.stage === 'lab' && !state.lab.result) labRun();
+  if (state.stage === 'lab' && !state.lab.result && !state.operation) labRun();
+  $('open').disabled = Boolean(state.busy);
+  $('scale').disabled = Boolean(state.operation);
   $('file-name').textContent = state.fileName ?? '';
   $('save').disabled = $('copy').disabled = !result() || Boolean(state.busy);
   for (const tab of document.querySelectorAll('[data-stage]')) {
@@ -1047,7 +1097,7 @@ function update() {
 $('version').textContent = VERSION;
 checkUpdate();
 cloudKey.load().then(update, console.error);
-$('open').onclick = () => $('file').click();
+$('open').onclick = () => { if (!state.busy) $('file').click(); };
 $('file').onchange = event => { openFiles([...event.target.files]); event.target.value = ''; };
 $('save').onclick = save;
 $('copy').onclick = copyResult;
@@ -1066,7 +1116,7 @@ $('tabs').onkeydown = event => {
 document.addEventListener('keydown', event => {
   if (!(event.ctrlKey || event.metaKey)) return;
   const key = event.key.toLowerCase();
-  if (key === 'o') { event.preventDefault(); $('file').click(); }
+  if (key === 'o') { event.preventDefault(); $('open').click(); }
   if (key === 's') { event.preventDefault(); save(); }
   if (key === 'z' && !typing()) { event.preventDefault(); stepSettings(!event.shiftKey); }
 });
@@ -1083,7 +1133,7 @@ document.addEventListener('drop', event => {
 // 붙여넣기: 클립보드의 그림(캡처 등)을 연다. 글자 입력 칸에 붙여넣을 때는 건드리지 않는다.
 document.addEventListener('paste', event => {
   const files = [...(event.clipboardData?.files ?? [])];
-  if (!files.some(f => f.type.startsWith('image/'))) return;
+  if (typing() || !files.some(f => f.type.startsWith('image/'))) return;
   event.preventDefault();
   takeFiles(files.map((f, k) => (f.name && f.name !== 'image.png' ? f : new File([f], `붙여넣은 그림${files.length > 1 ? k + 1 : ''}.png`, { type: f.type }))));
 });
@@ -1093,15 +1143,24 @@ document.addEventListener('copy', event => {
   event.preventDefault();
   copyResult();
 });
+async function loadTabFile(file, stage) {
+  if (state.busy) return;
+  state.operation = '이미지 읽는 중';
+  state.error = null;
+  update();
+  try {
+    const picture = await loadPictureFile(file);
+    if (stage === 'lab') setLabInput(picture, file.name);
+    else setCloudInput(picture, file.name);
+  } catch (error) {
+    state.error = error.message;
+  } finally {
+    state.operation = null;
+    update();
+  }
+}
+
 function takeFiles(files) {
-  const file = files.find(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name));
-  if (!file) return;
-  // AI 보정·실험 탭에서는 그 탭의 그림으로 넣고(실험 탭에 여러 장이면 일괄 변환), 다른 탭에서는 도트화할 원본으로 연다.
-  if (state.stage === 'lab' && files.filter(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name)).length > 1) {
-    openFiles(files);
-  } else if (state.stage === 'repair' || state.stage === 'lab') {
-    loadPictureFile(file).then(picture => (state.stage === 'lab' ? setLabInput(picture, file.name) : setCloudInput(picture, file.name)))
-      .catch(error => { state.error = error.message; update(); });
-  } else openFiles(files);
+  openFiles(files);
 }
 update();
