@@ -1843,10 +1843,10 @@ export function flatOutline(conversion) {
 }
 
 // ── 베리 잉크 전체
-export function renderBerry(subject, w, h, settings, lines = null) {
+export function renderBerry(subject, w, h, settings, lines = null, whole = false) {
   const image = subject.image();
   const size = { w, h };
-  const prepared = withoutLightBackground(image);
+  const prepared = whole ? image : withoutLightBackground(image);
   const aligned = bestGrid(prepared, size);
   const offset = [aligned[0], -aligned[1]];
   let conversion = convertBerry(prepared, size, Math.max(2, Math.min(64, settings.colors - (settings.boundary ? 2 : 1))), offset);
@@ -1919,9 +1919,10 @@ function removeStrayInk(raster, mask, outline, width) {
 
 // ───────────────────────────── 원본 색 살림 (개선판 '약하게 · 원본 색 살림')
 // 배경 정리 → 칸마다 대표 색 → 색 수만큼 팔레트 → 원본 대조 보정. 외곽선을 따로 씌우지 않아 원본 선을 그대로 살린다.
-export function renderSoft(subject, w, h, settings) {
+export function renderSoft(subject, w, h, settings, whole = false) {
   const size = { w, h };
-  const prepared = withoutLightBackground(subject.image());
+  const original = subject.image();
+  const prepared = whole ? original : withoutLightBackground(original);
   const fitted = fit(prepared.w, prepared.h, w, h);
   const side = 4, sw = fitted.w * side, sh = fitted.h * side;
   const bytes = rasterize(prepared, sw, sh, { x: 0, y: 0, w: sw, h: sh });
@@ -2202,16 +2203,16 @@ function finishDot(result, settings) {
   if (settings.hardEdge) image = hardEdge(image);
   return image === result.image ? result : { ...result, image };
 }
-export function render(subject, reduced, settings, lines = null) {
-  return finishDot(renderMethod(subject, reduced, settings, lines), settings);
+export function render(subject, reduced, settings, lines = null, whole = false) {
+  return finishDot(renderMethod(subject, reduced, settings, lines, whole), settings);
 }
-function renderMethod(subject, reduced, settings, lines = null) {
+function renderMethod(subject, reduced, settings, lines, whole) {
   if (settings.method === 'faithful') return renderFaithful(reduced, settings, subject);
   const guide = settings.aiLines ? lines : null;
   const w = reduced.image.grid.w, h = reduced.image.grid.h;
-  if (settings.method === 'soft') return renderSoft(subject, w, h, settings);
+  if (settings.method === 'soft') return renderSoft(subject, w, h, settings, whole);
   // 2.0 방식과 원본 직행은 같은 그리기에 축소만 다르다(원본 직행은 원본에서 바로 격자를 읽음).
-  return settings.method === 'basic' || settings.method === 'direct' ? renderBasic(reduced, settings, guide) : renderBerry(subject, w, h, settings, guide);
+  return settings.method === 'basic' || settings.method === 'direct' ? renderBasic(reduced, settings, guide) : renderBerry(subject, w, h, settings, guide, whole);
 }
 export function dotStatus(settings, dotted) {
   const done = [settings.lonePixels && '외톨이 점 정리', settings.palette && settings.palette !== 'off' && paletteColors(settings).length > 0 && '팔레트 고정', settings.hardEdge && '가장자리 또렷'].filter(Boolean);
@@ -2359,12 +2360,12 @@ export function snapColors(input, reduced, subject) {
 }
 
 /**
- * 가장 바깥 실루엣을 1픽셀 선으로 또렷하게 긋고 그 바깥의 흐린 칸을 지운다.
+ * 가장 바깥 실루엣을 1픽셀 선으로 또렷하게 긋고 원본 알파는 유지한다.
  * cells가 있으면 원본 그 자리에 선이 있는 칸만 원본 선 색으로(없는 칸은 제 색 그대로), 없으면 전부 검정.
  * 바깥 테두리가 대부분 밝은 조각(일부러 그린 흰 외곽선)은 제 색을 둔다.
  */
 export function crispOutline(input, cells = null) {
-  const grid = input.grid, px = input.px, output = new Raster(grid.w, grid.h);
+  const grid = input.grid, px = input.px, output = input.clone();
   const solid = Array.from(px, p => A(p) >= 128);
   for (const piece of grid.components(solid)) {
     const rim = piece.filter(i => { let edge = false; grid.each4(i, j => { if (!solid[j]) edge = true; }); return edge; });
@@ -2376,7 +2377,7 @@ export function crispOutline(input, cells = null) {
     const outline = new Set(lightRim ? [] : rim.filter(i => !shadow(i)));
     for (const i of piece) {
       const line = !outline.has(i) ? null : !cells ? BLACK : cells[i].dark >= 5 ? cells[i].ink : null;
-      output.px[i] = withAlpha(line ?? px[i], 255);
+      if (line !== null) output.px[i] = withAlpha(line, A(px[i]));
     }
   }
   return output;

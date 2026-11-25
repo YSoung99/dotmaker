@@ -358,8 +358,12 @@ function mapleBuild(source, w, h, options) {
     const outlineMaterial = material.slice(), isOutline = new Array(count).fill(false);
     for (const i of opaque) {
       const x = i % w, y = (i / w) | 0;
-      if (dark[i]) {
-        if (!lineCell[i]) continue;
+      const outer = MAPLE_SIDES.some(([dx, dy]) => {
+        const u = x + dx, v = y + dy;
+        return u < 0 || v < 0 || u >= w || v >= h || material[v * w + u] < 0;
+      });
+      if (outer) isOutline[i] = true;
+      if (dark[i] && lineCell[i]) {
         const votes = new Map();
         for (let v = Math.max(0, y - 1); v <= Math.min(h - 1, y + 1); v++) for (let u = Math.max(0, x - 1); u <= Math.min(w - 1, x + 1); u++) {
           const j = v * w + u;
@@ -367,10 +371,7 @@ function mapleBuild(source, w, h, options) {
         }
         const best = mapleMost(votes);
         if (best !== null) { isOutline[i] = true; outlineMaterial[i] = best; }
-      } else if (MAPLE_SIDES.some(([dx, dy]) => {
-        const u = x + dx, v = y + dy;
-        return u < 0 || v < 0 || u >= w || v >= h || material[v * w + u] < 0;
-      })) isOutline[i] = true;
+      }
     }
     if (options.boundary) mapleBoundaries(isOutline, material, ramps, opaque, w, h);
     for (const i of opaque) if (isOutline[i]) { material[i] = outlineMaterial[i]; tone[i] = -1; }

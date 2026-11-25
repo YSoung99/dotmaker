@@ -71,3 +71,21 @@ test('OKLab 왕복: sRGB → OKLab → sRGB가 같은 색', () => {
     assert.deepEqual(Array.from(lab.mapleEncode(lab.mapleDecode(...rgb))), rgb);
   }
 });
+
+test('메이플 진한 잉크는 어두운 오브젝트의 바깥 테두리에도 적용된다', () => {
+  const bytes = new Uint8ClampedArray(10 * 10 * 4);
+  for (let y = 3; y < 6; y++) {
+    for (let x = 3; x < 6; x++) bytes.set([20, 20, 20, 255], (y * 10 + x) * 4);
+  }
+  const result = lab.labCompute({ w: 10, h: 10, bytes }, { method: 'maple', wanted: 1, maple: maple('ink') });
+  assert.deepEqual(Array.from(result.bytes.slice(132, 136)), [29, 21, 20, 255]);
+  assert.deepEqual(Array.from(result.bytes.slice(176, 180)), [20, 20, 20, 255]);
+});
+
+test('실험 탭에 빈 커스텀 팔레트가 들어오면 원본에서 색을 고른다', () => {
+  const bytes = new Uint8ClampedArray([220, 90, 20, 255]);
+  for (const method of ['average', 'vote']) {
+    const result = lab.labCompute({ w: 1, h: 1, bytes }, { method, wanted: 1, palette: [], count: 16 });
+    assert.deepEqual(Array.from(result.bytes), Array.from(bytes));
+  }
+});
