@@ -1,0 +1,27 @@
+name: Windows 업데이트 확인 3.11.2 → 3.11.3
+on:
+  push:
+    branches: [qa/ota-3113]
+permissions:
+  contents: read
+jobs:
+  windows-ota:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 이전 버전 및 최신 공개판 확인
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v3.11.2 --pattern DotMaker-3.11.2-win-x64.exe --dir $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $latest = gh release view --json tagName --jq .tagName
+          if ($latest -ne 'v3.11.3') { throw "공개 최신 버전 불일치: $latest" }
+      - name: 앱 안에서 공개 업데이트 실행
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File test/windows-ota-qa.ps1
