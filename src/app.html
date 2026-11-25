@@ -76,6 +76,8 @@ input[type=number] { width: 64px; text-align: center; padding: 5px 6px; }
 .toolbar { display: flex; align-items: center; gap: 12px; padding: 16px 20px 0; flex-wrap: wrap; }
 .toolbar .name { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 .toolbar label { display: flex; align-items: center; gap: 6px; }
+#choose-save-location[aria-pressed=true] { border-color: var(--focus); color: var(--focus); }
+#choose-save-location span { font-size: 12px; }
 .brand { font-weight: 700; letter-spacing: -.01em; }
 .brand small { font-weight: 400; color: var(--muted); margin-left: 6px; }
 .update { font-weight: 600; white-space: nowrap; color: var(--focus); margin-left: 10px; }
@@ -205,6 +207,7 @@ input.wide { width: min(520px, 100%); text-align: left; }
   </label>
   <button id="copy" type="button" disabled title="지금 탭의 결과를 저장 배율대로 클립보드에 복사합니다.">복사</button>
   <button id="save" type="button" disabled>PNG 저장…</button>
+  <button id="choose-save-location" type="button" aria-pressed="true" hidden>저장 위치 지정 <span aria-hidden="true">켬</span></button>
   <input id="file" type="file" accept="image/*" multiple hidden>
 </div>
 <nav id="tabs" class="tabs" role="tablist" aria-label="단계">
