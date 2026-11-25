@@ -53,3 +53,26 @@ for (const [name, change] of Object.entries(variants)) {
 test('parsePalette: 16진수 색을 쉼표로 받아 읽는다', () => {
   assert.equal(core.parsePalette('#1a1c2c, f4f4f4, ff77a8').length, 3);
 });
+
+test('바깥 외곽선은 반투명 장식과 그림자의 알파를 바꾸지 않는다', () => {
+  const input = new core.Raster(5, 5);
+  input.px[6] = core.pack(40, 35, 40, 255);
+  input.px[7] = core.pack(40, 40, 40, 180);
+  input.px[12] = core.pack(110, 110, 110, 100);
+  const output = core.crispOutline(input);
+  assert.deepEqual(Array.from(output.px, core.A), Array.from(input.px, core.A));
+});
+
+test('그림 전체 변환은 원본 색 살림과 베리 잉크에서 흰 배경을 유지한다', () => {
+  const subject = new core.Raster(64, 64);
+  subject.px.fill(core.pack(255, 255, 255));
+  for (let y = 23; y < 42; y++) {
+    for (let x = 23; x < 42; x++) subject.px[y * 64 + x] = core.pack(210, 40, 25);
+  }
+  const reduced = core.reduce(subject, 50, 50);
+  for (const method of ['soft', 'berry']) {
+    const settings = { ...core.defaultSettings(), method };
+    const result = core.render(subject, reduced, settings, null, true);
+    assert.ok(result.image.px.filter(pixel => core.A(pixel) > 0).length > 2000, method);
+  }
+});

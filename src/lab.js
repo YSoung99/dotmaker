@@ -52,6 +52,7 @@ function labInitial() {
 const labSource = () => state.lab.input?.picture ?? state.original;
 
 function setLab(key, value) {
+  if (state.operation) return;
   const lab = state.lab;
   rememberSettings('lab');
   lab[key] = value;
@@ -109,8 +110,8 @@ const labPaletteRGB = lab => lab.palette.slice(0, lab.count)
   .map(hex => [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)]);
 
 /** 작업자에 넘길 실험 탭 설정. 결과 크기를 골랐으면 긴 변이 그 칸 수가 되게 묶는다(원본이 더 작으면 원본 크기 그대로). */
-function labOptions(source) {
-  const lab = state.lab, maple = lab.method === 'maple';
+function labOptions(source, lab = state.lab) {
+  const maple = lab.method === 'maple';
   return { wanted: lab.size ? Math.max(1, Math.max(source.w, source.h) / lab.size) : lab.block,
     method: lab.method, protect: lab.protect, repair: lab.repair, count: lab.count,
     palette: lab.mode === 'custom' && !maple ? labPaletteRGB(lab) : null,
@@ -120,19 +121,20 @@ function labOptions(source) {
 /** 여러 장: 지금 실험 탭 설정(배경 지우기 포함)으로 모두 바꿔 고른 폴더에 저장 배율대로 저장한다. 이 탭의 그림·결과는 그대로 둔다. */
 async function labBatch(files) {
   if (state.busy) return;
-  const folder = await desktop?.pickFolder?.();
+  const snapshot = settingsOf('lab');
+  const folder = await pickBatchFolder();
   if (!folder) return;
-  const scale = state.exportScale, cutout = state.lab.cutout, failed = [];
+  const scale = state.exportScale, cutout = snapshot.cutout, failed = [];
   let saved = 0;
   state.notice = null;
   for (const [k, file] of files.entries()) {
     const label = `실험 탭 여러 장 변환 중 (${k + 1}/${files.length}) · ${file.name}`;
     try {
-      state.busy = label; state.error = null; update();
+      state.operation = label; state.error = null; update();
       const raw = await loadPictureFile(file);
       const source = (cutout && await labCutoutPicture(raw, label)) || raw;
-      // 설정은 그림마다 그때 값으로(결과 크기는 그림 크기에 따라 달라진다). 'labBatch'는 화면의 실험 탭 계산에 밀려 버려지지 않는다.
-      const done = await engine.request('labBatch', { source, options: labOptions(source) }, label);
+      // 설정은 시작할 때 고정하고, 축소 비율은 각 그림 크기에 맞춰 계산한다. 'labBatch'는 화면의 실험 탭 계산에 밀려 버려지지 않는다.
+      const done = await engine.request('labBatch', { source, options: labOptions(source, snapshot) }, label);
       const picture = scaled({ w: done.w, h: done.h, bytes: done.bytes }, scale);
       const blob = await new Promise(resolve => toCanvas(picture).toBlob(resolve, 'image/png'));
       await desktop.writeToFolder(outputName(file.name, 'lab', done, scale), new Uint8Array(await blob.arrayBuffer()));
@@ -142,7 +144,7 @@ async function labBatch(files) {
       failed.push(file.name);
     }
   }
-  state.busy = null;
+  state.operation = null;
   state.error = null;
   state.notice = `실험 탭 여러 장 변환: ${saved}장을 '${folder}' 폴더에 저장했습니다` + (failed.length ? ` · 실패 ${failed.length}장 (${failed.join(', ')})` : '');
   update();
@@ -177,7 +179,7 @@ function labRun() {
 }
 
 function labControls() {
-  const lab = state.lab, source = labSource(), off = !source, maple = lab.method === 'maple';
+  const lab = state.lab, source = labSource(), off = !source || Boolean(state.operation), maple = lab.method === 'maple';
   const count = el('select', { disabled: off, onchange: event => setLab('count', Number(event.target.value)) },
     ...LAB_COUNTS[lab.mode].map(v => el('option', { value: String(v), textContent: `${v}색`, selected: v === lab.count })));
   count.setAttribute('aria-label', '팔레트 색 수');
@@ -196,8 +198,8 @@ function labControls() {
     row(el('span', { textContent: '바꿀 그림:' }),
       el('span', { className: 'muted', textContent: lab.input ? `넣은 그림 '${lab.input.name}' (${lab.input.picture.w}×${lab.input.picture.h})`
         : state.original ? `도트화 탭에서 연 원본 (${state.original.w}×${state.original.h})` : '없음 — 이미지를 넣거나 열어 주세요' }),
-      el('button', { type: 'button', textContent: '다른 이미지 넣기…', onclick: () => pickFile((picture, name) => setLabInput(picture, name)) }),
-      lab.input && el('button', { type: 'button', textContent: '넣은 그림 빼기', onclick: () => setLabInput(null) }),
+      el('button', { type: 'button', textContent: '다른 이미지 넣기…', disabled: Boolean(state.busy), onclick: () => pickFile('lab') }),
+      lab.input && el('button', { type: 'button', textContent: '넣은 그림 빼기', disabled: Boolean(state.operation), onclick: () => setLabInput(null) }),
       toggle('배경 지우기', lab.cutout, v => setLab('cutout', v), off,
         '캐릭터만 남기고 배경을 지운 뒤 도트로 바꿉니다. 끄면 그림 전체를 배경째 바꿉니다. 배경이 복잡한 그림은 처음 한 번 배경 분리 AI 파일을 받습니다.')),
     row(labelled('결과 크기', size),

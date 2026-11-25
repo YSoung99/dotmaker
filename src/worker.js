@@ -6,9 +6,9 @@ const picture = raster => ({ w: raster.grid.w, h: raster.grid.h, bytes: raster.s
 
 /** 원본 보존은 투명 그림의 떨어진 장식까지 살리고 원본에서 바로 격자를 읽어, 캐릭터·축소를 따로 둔다. */
 function faithfulParts() {
-  const { w, h } = current.reduced.image.grid;
+  const { w, h } = current;
   if (!current.faithful || current.faithful.w !== w || current.faithful.h !== h) {
-    const subject = current.whole ? Subject.whole(current.original) : Subject.extract(current.original, current.masked, true);
+    const subject = current.faithful?.subject ?? (current.whole ? current.subject : Subject.extract(current.original, current.masked, true));
     current.faithful = { w, h, subject, reduced: reduceDirect(subject, w, h) };
   }
   return current.faithful;
@@ -16,16 +16,23 @@ function faithfulParts() {
 
 /** 원본 직행은 캐릭터는 그대로 두고, 축소만 원본에서 바로 격자를 읽는다(맥판과 같음). */
 function directParts() {
-  const { w, h } = current.reduced.image.grid;
+  const { w, h } = current;
   if (!current.direct || current.direct.w !== w || current.direct.h !== h) {
     current.direct = { w, h, subject: current.subject, reduced: reduceDirect(current.subject, w, h) };
   }
   return current.direct;
 }
 
+function partsFor(method) {
+  if (method === 'faithful') return faithfulParts();
+  if (method === 'direct') return directParts();
+  current.reduced ??= reduce(current.subject, current.w, current.h);
+  return current;
+}
+
 function finish(id, settings) {
-  const parts = settings.method === 'faithful' ? faithfulParts() : settings.method === 'direct' ? directParts() : current;
-  const dotted = render(parts.subject, parts.reduced, settings, current.lines);
+  const parts = partsFor(settings.method);
+  const dotted = render(parts.subject, parts.reduced, settings, current.lines, current.whole);
   const reduced = picture(parts.reduced.image), dot = picture(dotted.image);
   const sharpened = current.upscaled ? ` · AI 업스케일 ${current.upscaled === 'esr6b' ? '6B' : 'v3'}`
     : current.skipped ? ` · AI 업스케일 건너뜀(${current.skipped})` : '';
@@ -46,11 +53,14 @@ async function handle(job) {
       if (upscaleModel(current.raw, job.settings.upscale, Math.max(job.w, job.h)) !== current.wanted) {
         current = await load(current.raw, job.w, job.h, job.settings, progress, current.whole);
       } else {
-        current = { ...current, reduced: reduce(current.subject, job.w, job.h) };
+        if (current.w !== job.w || current.h !== job.h) {
+          Object.assign(current, { w: job.w, h: job.h, reduced: null, direct: null, jevStrokes: null });
+        }
+        if (wantsLines(job.settings) && !current.lines) current.lines = await extractLines(current.subject, progress);
       }
       finish(job.id, job.settings);
     } else if (job.type === 'redot') {
-      const { w, h } = current.reduced.image.grid;
+      const { w, h } = current;
       if (upscaleModel(current.raw, job.settings.upscale, Math.max(w, h)) !== current.wanted) {
         current = await load(current.raw, w, h, job.settings, progress, current.whole);
       } else if (wantsLines(job.settings) && !current.lines) {
@@ -76,14 +86,14 @@ async function handle(job) {
       // JEV 자동 선택: 설정 후보마다 그린 결과
       if (job.list.some(wantsLines) && !current.lines) current.lines = await extractLines(current.subject, progress);
       const results = job.list.map(settings => {
-        const parts = settings.method === 'faithful' ? faithfulParts() : settings.method === 'direct' ? directParts() : current;
-        const dotted = render(parts.subject, parts.reduced, settings, current.lines);
+        const parts = partsFor(settings.method);
+        const dotted = render(parts.subject, parts.reduced, settings, current.lines, current.whole);
         return { reduced: picture(parts.reduced.image), dotted: picture(dotted.image), status: dotStatus(settings, dotted) };
       });
       self.postMessage({ id: job.id, type: 'done', results });
     } else if (job.type === 'subject') {
       // 클라우드 AI에 보낼 캐릭터 그림
-      const subject = picture(current.subject);
+      const subject = picture(job.faithful ? faithfulParts().subject : current.subject);
       self.postMessage({ id: job.id, type: 'done', subject }, [subject.bytes.buffer]);
     } else if (job.type === 'cutout') {
       // 실험 탭: 받은 그림에서 배경만 지운 캐릭터를 돌려준다(지금 열어 둔 그림은 건드리지 않는다).
@@ -134,14 +144,14 @@ async function load(raw, w, h, settings, progress, whole = false) {
   const { image: original, upscaled, skipped } = await tryUpscale(raw, wanted, progress);
   let prepared;
   try {
-    prepared = whole ? { ...prepare(original, w, h, null, false, true), masked: null } : await prepareAny(original, w, h, progress);
+    prepared = whole ? { ...prepare(original, w, h, null, false, true), masked: null } : await prepareAny(original, w, h, progress, settings.method === 'faithful');
   } catch (error) {
     // 캐릭터 분리(배경 지우기)에서 막힌 것이면 화면이 '분리 없이 그대로 변환'을 권할 수 있게 알린다.
     error.canSkip = !whole;
     throw error;
   }
   const lines = wantsLines(settings) ? await extractLines(prepared.subject, progress) : null;
-  return { raw, wanted, upscaled, skipped, original, masked: prepared.masked, subject: prepared.subject, reduced: prepared.reduced, lines, faithful: null, whole };
+  return { raw, wanted, upscaled, skipped, original, w, h, masked: prepared.masked, subject: prepared.subject, reduced: prepared.reduced, lines, faithful: null, whole };
 }
 
 /** AI 업스케일이 실패해도(파일을 못 받음 등) 그림은 연다: 키우지 않은 원본으로 도트화하고 이유를 남긴다. */
@@ -159,10 +169,14 @@ async function tryUpscale(image, model, progress) {
 const wantsLines = settings => settings.aiLines && settings.method !== 'soft';
 
 /** 캐릭터 분리 + 축소. 밝은 단색·투명 배경이 아니면 AI 모델로 배경을 지운다. */
-async function prepareAny(image, w, h, progress) {
+async function prepareAny(image, w, h, progress, faithful = false) {
   try {
     return { ...prepare(image, w, h), masked: null };
   } catch (error) {
+    if (faithful && error.code === 'subject') {
+      const subject = Subject.extract(image, null, true);
+      return { subject, reduced: null, masked: null };
+    }
     if (error.code !== 'needsMask') throw error;
     const masked = await removeBackground(image, progress);
     return { ...prepare(image, w, h, masked), masked };

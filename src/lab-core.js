@@ -230,7 +230,7 @@ function labCompute(source, options) {
   const voting = options.method === 'vote';
   const small = voting ? labVote(source, options.wanted, options.protect) : labShrink(source, options.wanted);
   const mended = voting && options.repair ? labRepairOutline(small) : 0;
-  const palette = options.palette ?? labAutoPalette(small, options.count);
+  const palette = options.palette?.length ? options.palette : labAutoPalette(small, options.count);
   const px = small.bytes, cache = new Map(), used = new Set();
   for (let i = 0; i < px.length; i += 4) {
     if (px[i + 3] === 0) continue;
