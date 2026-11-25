@@ -14,7 +14,7 @@ jobs:
         with:
           node-version: 22
       - name: 이전 버전 및 최신 공개판 확인
-        shell: powershell
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

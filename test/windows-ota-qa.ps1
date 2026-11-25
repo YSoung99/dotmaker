@@ -18,9 +18,9 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 function Click-UpdateDialog([string]$text, [int]$seconds) {
   $end = (Get-Date).AddSeconds($seconds)
   $rootUI = [System.Windows.Automation.AutomationElement]::RootElement
-  $owner = New-Object System.Windows.Automation.PropertyCondition(
+  $owner = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $old.Id)
-  $name = New-Object System.Windows.Automation.PropertyCondition(
+  $name = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::NameProperty, $text)
   do {
     $windows = $rootUI.FindAll([System.Windows.Automation.TreeScope]::Children, $owner)
