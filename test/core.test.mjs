@@ -76,3 +76,26 @@ test('그림 전체 변환은 원본 색 살림과 베리 잉크에서 흰 배�
     assert.ok(result.image.px.filter(pixel => core.A(pixel) > 0).length > 2000, method);
   }
 });
+
+test('검정 테두리 겹침은 바깥 반투명 검정 계열만 같은 자리에서 겹친다', () => {
+  const input = new core.Raster(6, 6);
+  for (let y = 2; y <= 4; y++) {
+    for (let x = 2; x <= 4; x++) input.px[y * 6 + x] = core.pack(80, 80, 80);
+  }
+  input.px[21] = core.pack(0, 0, 0, 25); // 불투명 픽셀로 둘러싸인 안쪽 검정
+  input.px[1] = core.pack(190, 20, 20, 25); // 바깥 색상 픽셀
+  input.px[8] = core.pack(12, 18, 20, 3); // 바깥 아주 옅은 검정 계열
+  input.px[6] = core.pack(0, 0, 0, 25); // 바깥 검정
+  assert.equal(core.outlineStackLayers(1), 10);
+  assert.equal(core.outlineStackLayers(50), 500);
+  assert.equal(core.stackDarkOutline(input, 0), input);
+  assert.equal(core.stackDarkOutline(input, 1), input);
+  const first = core.stackDarkOutline(input, 10);
+  assert.equal(first.px[6], core.pack(0, 0, 0, 164));
+  assert.equal(first.px[8], core.pack(12, 18, 20, 28));
+  assert.equal(first.px[21], input.px[21]);
+  assert.equal(first.px[1], input.px[1]);
+  assert.equal(first.px[0], 0);
+  assert.equal(first.px[20], input.px[20]);
+  assert.equal(core.stackDarkOutline(input, 500).px[8], core.pack(12, 18, 20, 254));
+});
