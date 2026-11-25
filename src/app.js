@@ -51,6 +51,7 @@ const state = {
   lab: labInitial(),  // 실험 탭(베타) — lab.js
   retryWhole: null, // 캐릭터 분리에 실패한 파일(‘분리 없이 그대로 변환’ 버튼용)
   exportScale: [1, 2, 4, 8].includes(store.get('exportScale', 1)) ? store.get('exportScale', 1) : 1,
+  chooseSaveLocation: store.get('chooseSaveLocation', true) !== false,
   original: null,   // 원본 미리보기 { w, h, bytes }
   product: null,    // { reduced, dotted, status } — 그림은 { w, h, bytes }
   jev: null,        // JEV 결과 창 { focus, rows, picks, base } 또는 키 설정 창 { settings: true }
@@ -182,6 +183,16 @@ function scaled(picture, k) {
 
 async function writePNG(picture, suggestedName) {
   const blob = await new Promise(done => toCanvas(picture).toBlob(done, 'image/png'));
+  if (desktop?.saveResultPNG) {
+    const chooseLocation = state.chooseSaveLocation;
+    const saved = await desktop.saveResultPNG(suggestedName, new Uint8Array(await blob.arrayBuffer()),
+      chooseLocation, chooseLocation ? store.get('lastSaveFolder', null) : null);
+    if (saved) {
+      if (chooseLocation) store.set('lastSaveFolder', saved.folder);
+      state.notice = `PNG를 저장했습니다 · ${saved.name}`;
+    }
+    return;
+  }
   if (window.showSaveFilePicker) {
     let handle;
     try {
@@ -483,13 +494,30 @@ function toggleCompare() {
   if (state.compare) loadAligned();
 }
 
-function save() {
+async function save() {
   const picture = result();
   if (!picture || state.busy) return;
   const scale = state.exportScale;
   const input = state.stage === 'lab' ? state.lab.input : state.stage === 'repair' ? state.cloud.input : null;
   const name = outputName(input?.name ?? state.fileName, state.stage, picture, scale);
-  writePNG(scaled(picture, scale), name).catch(error => { state.error = 'PNG를 저장하지 못했습니다.'; console.error(error); update(); });
+  const nativeSave = Boolean(desktop?.saveResultPNG);
+  if (nativeSave) {
+    state.notice = state.error = null;
+    state.operation = 'PNG 저장 중';
+    update();
+  }
+  try {
+    await writePNG(scaled(picture, scale), name);
+  } catch (error) {
+    state.error = 'PNG를 저장하지 못했습니다.';
+    console.error(error);
+    if (!nativeSave) update();
+  } finally {
+    if (nativeSave) {
+      state.operation = null;
+      update();
+    }
+  }
 }
 
 function setSetting(key, value) {
@@ -1013,7 +1041,8 @@ function helpScreen() {
       '<b>여러 장 한꺼번에</b>: 이미지를 여러 장 고르거나 끌어다 놓으면, 저장할 폴더를 묻고 지금 설정·크기·저장 배율로 모두 도트화해 그 폴더에 저장합니다.',
       `<b>결과 크기</b>: ${SETTINGS.size.min}×${SETTINGS.size.min} ~ ${SETTINGS.size.max}×${SETTINGS.size.max}의 정사각형입니다. 드롭다운에서 ${SETTINGS.size.listStep}px 단위로 고르거나, 옆 칸에 숫자를 직접 넣고 Enter를 누르면(${SETTINGS.size.step}px 단위) 바로 다시 그립니다. 배경은 자동으로 지우고 캐릭터를 캔버스에 맞춥니다.`,
       '<b>도트화</b> 탭: 설정을 바꾸면 바로 다시 계산합니다. 계산 중에도 설정을 바꿀 수 있고, 마지막 설정으로 결과가 나옵니다.',
-      '<b>PNG 저장…</b>: 지금 탭의 결과를 저장합니다. <kbd>Ctrl</kbd>+<kbd>S</kbd> · 저장 배율(1·2·4·8배)은 번짐 없이 키웁니다.',
+      '<b>PNG 저장</b>: 지금 탭의 결과를 저장합니다. <kbd>Ctrl</kbd>+<kbd>S</kbd> · 저장 배율(1·2·4·8배)은 번짐 없이 키웁니다.',
+      ...(desktop?.saveResultPNG ? ['<b>저장 위치 지정</b>: 켜면 PNG를 저장할 폴더와 파일명을 고릅니다. 다음 저장 창은 마지막으로 저장한 폴더에서 열립니다. 끄면 내 문서에 바로 저장합니다.'] : []),
       '<b>복사</b>: 지금 탭의 결과를 저장 배율대로 클립보드에 복사합니다. <kbd>Ctrl</kbd>+<kbd>C</kbd>',
       '<b>되돌리기</b>: 도트화·실험 탭에서 설정을 바꾼 것을 하나씩 되돌립니다. <kbd>Ctrl</kbd>+<kbd>Z</kbd> · 다시 하기는 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>(맥은 <kbd>⌘</kbd>). 글자 입력 칸에 커서가 있을 때는 그 칸의 글자를 되돌립니다.',
       '<b>원본 보기</b>(결과 위 버튼): 결과 자리에 원본을 같은 위치·크기로 보여 줍니다. 눌러 가며 달라진 곳을 비교하세요.',
@@ -1108,6 +1137,16 @@ function update() {
   $('scale').disabled = Boolean(state.operation);
   $('file-name').textContent = state.fileName ?? '';
   $('save').disabled = $('copy').disabled = !result() || Boolean(state.busy);
+  if (desktop?.saveResultPNG) {
+    const choose = state.chooseSaveLocation;
+    const toggle = $('choose-save-location');
+    const folder = store.get('lastSaveFolder', null);
+    toggle.disabled = Boolean(state.operation);
+    toggle.setAttribute('aria-pressed', String(choose));
+    toggle.firstElementChild.textContent = choose ? '켬' : '끔';
+    toggle.title = choose ? `저장 창 시작 위치 · ${folder || '내 문서'}` : '내 문서에 바로 저장합니다.';
+    $('save').textContent = choose ? 'PNG 저장…' : 'PNG 저장';
+  }
   for (const tab of document.querySelectorAll('[data-stage]')) {
     const selected = tab.dataset.stage === state.stage;
     tab.setAttribute('aria-selected', String(selected));
@@ -1129,6 +1168,12 @@ cloudKey.load().then(update, console.error);
 $('open').onclick = () => { if (!state.busy) $('file').click(); };
 $('file').onchange = event => { openFiles([...event.target.files]); event.target.value = ''; };
 $('save').onclick = save;
+$('choose-save-location').hidden = !desktop?.saveResultPNG;
+$('choose-save-location').onclick = () => {
+  state.chooseSaveLocation = !state.chooseSaveLocation;
+  store.set('chooseSaveLocation', state.chooseSaveLocation);
+  update();
+};
 $('copy').onclick = copyResult;
 $('scale').onchange = event => { state.exportScale = Number(event.target.value); store.set('exportScale', state.exportScale); };
 for (const tab of document.querySelectorAll('[data-stage]')) {

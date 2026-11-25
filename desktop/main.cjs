@@ -53,21 +53,59 @@ ipcMain.handle('batch:pickFolder', async event => {
   batchFolder = picked.canceled ? null : picked.filePaths[0];
   return batchFolder && path.basename(batchFolder);
 });
-ipcMain.handle('batch:write', (_event, name, png) => {
-  if (!batchFolder) throw new Error('저장할 폴더를 고르지 않았습니다.');
-  const filename = path.basename(String(name));
+// 같은 이름이 있으면 덮어쓰지 않고 -2, -3…을 붙여 새로 만든다. 실제로 쓴 파일 이름을 돌려준다.
+function writeWithoutOverwrite(folder, filename, bytes) {
   const ext = path.extname(filename);
   const stem = path.basename(filename, ext);
-  const bytes = Buffer.from(png);
   for (let index = 1; ; index++) {
     const candidate = index === 1 ? filename : `${stem}-${index}${ext}`;
     try {
-      fs.writeFileSync(path.join(batchFolder, candidate), bytes, { flag: 'wx' });
+      fs.writeFileSync(path.join(folder, candidate), bytes, { flag: 'wx' });
       return candidate;
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
     }
   }
+}
+
+ipcMain.handle('batch:write', (_event, name, png) => {
+  if (!batchFolder) throw new Error('저장할 폴더를 고르지 않았습니다.');
+  return writeWithoutOverwrite(batchFolder, path.basename(String(name)), Buffer.from(png));
+});
+
+// 완성 PNG 저장(윈도우): 고르기를 켜면 저장 대화상자에서 고른 곳에, 끄면 내 문서에 바로 쓴다.
+// 화면이 준 폴더 경로에는 직접 쓰지 않고, 대화상자의 시작 위치로만 쓴다.
+const isFolder = folder => {
+  try { return typeof folder === 'string' && path.isAbsolute(folder) && fs.statSync(folder).isDirectory(); } catch { return false; }
+};
+// 윈도우 파일 이름으로 안전하게: 폴더 부분·금지 문자(: 포함, 대체 스트림 방지)·끝의 점과 공백·예약 이름(CON, COM1 등)을 피한다.
+const pngName = name => {
+  const base = path.win32.basename(String(name ?? '')).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim();
+  let stem = (path.extname(base).toLowerCase() === '.png' ? base.slice(0, -4) : base).replace(/[. ]+$/, '');
+  if (/^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\.|$)/i.test(stem)) stem = '_' + stem;
+  return `${stem || 'dotmaker'}.png`;
+};
+ipcMain.handle('result:savePNG', async (event, name, png, chooseLocation, rememberedFolder) => {
+  const filename = pngName(name);
+  const bytes = Buffer.from(png);
+  const documents = app.getPath('documents');
+  if (!chooseLocation) return { name: writeWithoutOverwrite(documents, filename, bytes), folder: documents };
+
+  const startFolder = isFolder(rememberedFolder) ? rememberedFolder : documents;
+  const picked = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender), {
+    title: '완성 PNG 저장',
+    defaultPath: path.join(startFolder, filename),
+    filters: [{ name: 'PNG 이미지', extensions: ['png'] }],
+  });
+  if (picked.canceled || !picked.filePath) return null;
+  const folder = path.dirname(picked.filePath);
+  const chosen = path.basename(picked.filePath);
+  // 대화상자가 덮어쓰기를 확인한 건 고른 그 이름뿐이다. .png를 붙여 이름이 바뀌면 기존 파일은 건드리지 않는다.
+  if (path.extname(chosen).toLowerCase() === '.png') {
+    fs.writeFileSync(picked.filePath, bytes);
+    return { name: chosen, folder };
+  }
+  return { name: writeWithoutOverwrite(folder, pngName(chosen + '.png'), bytes), folder };
 });
 
 // ───────────── 업데이트
