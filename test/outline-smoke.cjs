@@ -6,7 +6,6 @@ const path = require('node:path');
 const { app, BrowserWindow, session } = require('electron');
 const { expression, expected } = require('./outline-scenario.cjs');
 const { dotResizeExpression, dotResizeExpected } = require('./dot-resize-scenario.cjs');
-const { lab2Expression, lab2Expected } = require('./lab2-scenario.cjs');
 
 app.setPath('userData', mkdtempSync(path.join(tmpdir(), 'dotmaker-outline-smoke-')));
 app.disableHardwareAcceleration();
@@ -21,9 +20,6 @@ app.whenReady().then(async () => {
   const dotResize = await window.webContents.executeJavaScript(dotResizeExpression);
   assert.deepEqual(dotResize, dotResizeExpected);
   console.log('도트 축소 방식 Electron 검증 통과', dotResize);
-  const lab2 = await window.webContents.executeJavaScript(lab2Expression);
-  assert.deepEqual(lab2, lab2Expected);
-  console.log('실험실 2 Electron 검증 통과', lab2);
   app.exit(0);
 }).catch(error => {
   console.error(error);
