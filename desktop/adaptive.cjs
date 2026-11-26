@@ -1,4 +1,4 @@
-// 설치판은 비교표와 같은 네이티브 Go 구현으로 내용 적응형 축소를 실행한다.
+// 설치판은 내용 적응형 축소를 네이티브 Go로 빠르게 실행한다. 결과는 맥·윈도우·wasm 모두 같다(tools/build-imago.mjs).
 const { execFile } = require('node:child_process');
 const path = require('node:path');
 

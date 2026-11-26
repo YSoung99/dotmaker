@@ -24,5 +24,6 @@
 !/tools/imago/LICENSE*
 !/tools/imago/adaptive/
 !/tools/imago/adaptive/main.go
+!/tools/imago/contentadaptive/
 !/tools/export-lines.py
 .DS_Store

@@ -11,8 +11,8 @@ import (
 	"os"
 	"strconv"
 
+	"dotmaker.local/imago/contentadaptive"
 	"github.com/loov/imago/pix"
-	"github.com/loov/imago/scale/contentadaptive"
 )
 
 const maxSide = 16384

@@ -12,6 +12,10 @@ import { gzipSync } from 'node:zlib';
 const root = new URL('../', import.meta.url);
 const moduleDir = fileURLToPath(new URL('tools/imago/', root));
 
+// 내용 적응형 축소는 아주 작은 계산 차이에도 결과가 갈린다. arm64(맥 M 칩)는 곱셈·덧셈을 한 번에 계산(FMA)해
+// 결과가 달라지므로 모든 빌드에서 끈다. 표준 math의 CPU별 어셈블리는 tools/imago/contentadaptive가 피한다.
+const SAME_FLOAT = '-gcflags=all=-d=fmahash=n';
+
 function go(args, env = {}) {
   try {
     return execFileSync('go', args, { cwd: moduleDir, env: { ...process.env, ...env }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -41,7 +45,7 @@ export async function buildImago() {
   const out = mkdtempSync(join(tmpdir(), 'dotmaker-imago-'));
   try {
     const wasmPath = join(out, 'imago.wasm');
-    go(['build', '-trimpath', '-mod=readonly', '-ldflags=-s -w', '-o', wasmPath, '.'], { GOOS: 'js', GOARCH: 'wasm', CGO_ENABLED: '0' });
+    go(['build', '-trimpath', '-mod=readonly', SAME_FLOAT, '-ldflags=-s -w', '-o', wasmPath, '.'], { GOOS: 'js', GOARCH: 'wasm', CGO_ENABLED: '0' });
     const wasm = gzipSync(readFileSync(wasmPath), { level: 9 }).toString('base64');
     const runtime = readFileSync(join(go(['env', 'GOROOT']), 'lib', 'wasm', 'wasm_exec.js'), 'utf8');
     const bridge = readFileSync(new URL('src/imago-worker.js', root), 'utf8');
@@ -63,7 +67,7 @@ export async function buildAdaptive({ platform = process.platform, arch = proces
   const dir = fileURLToPath(new URL('dist/native/', root));
   mkdirSync(dir, { recursive: true });
   const file = join(dir, platform === 'win32' ? 'dotmaker-adaptive.exe' : 'dotmaker-adaptive');
-  go(['build', '-trimpath', '-mod=readonly', '-ldflags=-s -w', '-o', file, './adaptive'], { GOOS: GOOS[platform], GOARCH: GOARCH[arch], GOAMD64: 'v1', CGO_ENABLED: '0' });
+  go(['build', '-trimpath', '-mod=readonly', SAME_FLOAT, '-ldflags=-s -w', '-o', file, './adaptive'], { GOOS: GOOS[platform], GOARCH: GOARCH[arch], GOAMD64: 'v1', CGO_ENABLED: '0' });
   writeFileSync(join(dir, 'dotmaker-adaptive.LICENSES.txt'), licenses() + '\n');
   return file;
 }

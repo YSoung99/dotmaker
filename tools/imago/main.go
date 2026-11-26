@@ -9,8 +9,8 @@ import (
 	"image"
 	"syscall/js"
 
+	"dotmaker.local/imago/contentadaptive"
 	"github.com/loov/imago/pix"
-	"github.com/loov/imago/scale/contentadaptive"
 	"github.com/loov/imago/scale/dpid"
 	"github.com/loov/imago/scale/perceptual"
 )
