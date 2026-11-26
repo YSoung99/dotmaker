@@ -14,10 +14,17 @@ function faithfulParts() {
   return current.faithful;
 }
 
+/** 원본 보존에서 '격자 위치 맞추기'를 켜면 맞춘 격자를 쓴다(한 번 계산해 둔다). */
+function reducedFor(parts, settings) {
+  if (!(settings.gridPhase && settings.method === 'faithful')) return parts.reduced;
+  parts.aligned ??= reduceAligned(parts.subject, parts.w, parts.h);
+  return parts.aligned;
+}
+
 async function finish(id, settings, progress) {
-  const parts = faithfulParts();
-  const dotted = await renderDot(parts.subject, parts.reduced, settings, progress, parts.candidates);
-  const reduced = picture(parts.reduced.image), dot = picture(dotted.image);
+  const parts = faithfulParts(), base = reducedFor(parts, settings);
+  const dotted = await renderDot(parts.subject, base, settings, progress, parts.candidates);
+  const reduced = picture(base.image), dot = picture(dotted.image);
   const sharpened = current.upscaled ? ` · AI 업스케일 ${current.upscaled === 'esr6b' ? '6B' : 'v3'}`
     : current.skipped ? ` · AI 업스케일 건너뜀(${current.skipped})` : ' · AI 업스케일 안 함';
   const background = current.whole ? ' · 배경 분리 없이 그대로' : current.aiBackground ? ' · AI 배경 분리' : '';
@@ -67,8 +74,9 @@ async function handle(job) {
       // JEV 자동 선택: 설정 후보마다 그린 결과
       const parts = faithfulParts(), results = [];
       for (const settings of job.list) {
-        const dotted = await renderDot(parts.subject, parts.reduced, settings, progress, parts.candidates);
-        results.push({ reduced: picture(parts.reduced.image), dotted: picture(dotted.image), status: dotStatus(settings, dotted) });
+        const base = reducedFor(parts, settings);
+        const dotted = await renderDot(parts.subject, base, settings, progress, parts.candidates);
+        results.push({ reduced: picture(base.image), dotted: picture(dotted.image), status: dotStatus(settings, dotted) });
       }
       self.postMessage({ id: job.id, type: 'done', results });
     } else if (job.type === 'subject') {
@@ -110,7 +118,8 @@ async function handle(job) {
       } else {
         const { image: source } = await tryUpscale(image, upscaleModel(image, settings.upscale, Math.max(w, h)), progress);
         const { subject } = await prepareDotSubject(source, settings.background, progress);
-        const dotted = await renderDot(subject, reduceDirect(subject, w, h), settings, progress);
+        const reduced = settings.gridPhase && settings.method === 'faithful' ? reduceAligned(subject, w, h) : reduceDirect(subject, w, h);
+        const dotted = await renderDot(subject, reduced, settings, progress);
         result = dotted.image;
         status = `AI 그림을 도트화 · ${dotStatus(settings, dotted)}`;
       }

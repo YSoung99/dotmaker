@@ -825,7 +825,13 @@ function finishRow(off) {
   const custom = s.palette === 'custom' && el('input', { type: 'text', className: 'palette', value: s.paletteCustom, disabled: off, spellcheck: false,
     placeholder: '예: #1a1c2c, #f4f4f4, ff77a8', onchange: event => setSetting('paletteCustom', event.target.value) });
   if (custom) custom.setAttribute('aria-label', '팔레트 색');
+  const colors = el('select', { disabled: off, onchange: event => setSetting('autoColors', Number(event.target.value)) },
+    ...[0, 8, 16, 24, 32].map(n => el('option', { value: String(n), textContent: n ? `${n}색` : '끄기', selected: n === s.autoColors })));
+  colors.setAttribute('aria-label', '색 수 줄이기');
   return row(
+    labelled('색 수 줄이기', colors),
+    toggle('선 다듬기(1px)', s.pixelPerfect, v => setSetting('pixelPerfect', v), off,
+      '1픽셀 선이 꺾이는 곳의 ㄴ자 모서리 칸을 빼서 계단을 매끄럽게 합니다. 손으로 찍은 도트처럼 외곽선이 깔끔해집니다.'),
     toggle('가장자리 반투명 없애기', s.hardEdge, v => setSetting('hardEdge', v), off,
       '테두리의 반투명 칸을 절반 이상 덮였으면 불투명, 아니면 투명으로 딱 자릅니다. 색 배경 위에 올려도 테두리가 흐리지 않습니다.'),
     toggle('외톨이 점 정리', s.lonePixels, v => setSetting('lonePixels', v), off,
@@ -858,7 +864,9 @@ function controls(stage) {
         toggle('경계 섞인 색 정리', s.cleanBlends, v => setSetting('cleanBlends', v), off,
           '축소하면서 경계에 생긴 탁한 중간색(빨강+검정 → 자주 등)을 가까운 원래 색으로 바꿉니다. 부드러운 명암은 건드리지 않습니다.'),
         toggle('작은 입선 보존', s.preserveMouth, v => setSetting('preserveMouth', v), off,
-          '눈 두 개 사이 아래의 작은 입 선(ω 등)이 회색으로 뭉개지지 않게 원본 선 색으로 살립니다.')),
+          '눈 두 개 사이 아래의 작은 입 선(ω 등)이 회색으로 뭉개지지 않게 원본 선 색으로 살립니다.'),
+        toggle('격자 위치 맞추기', s.gridPhase, v => setSetting('gridPhase', v), off,
+          '원본을 칸으로 나누는 시작 위치를 9가지로 시험해, 선이 두 칸에 걸쳐 흐려지는 곳이 가장 적은 위치를 고릅니다.')),
         finishRow(off), jevControls());
     }
     return el('div', { className: 'stack' }, sizeRow, methodRow, finishRow(off), jevAutoControls());
@@ -1072,6 +1080,8 @@ function helpScreen() {
       '<b>바깥 외곽선 1픽셀(원본 선 색)</b>(원본 보존): 투명 배경 바로 앞 가장 바깥 칸만, 원본 그 자리에 선이 있으면 원본 선 색으로 칠하고 그 바깥의 흐린 칸을 지웁니다. 흰 외곽선 장식과 발밑 그림자는 그대로 둡니다.',
       '<b>원본 색 맞추기</b>(원본 보존): 줄이면서 생긴 탁한 중간색 대신, 그 칸 원본에 실제로 있는 가장 가까운 색을 넣습니다.',
       '<b>경계 섞인 색 정리</b>(원본 보존): 줄이면서 경계에 생긴 탁한 중간색(빨강+검정 → 자주 등)을 가까운 원래 색으로 바꿉니다. 부드러운 명암은 건드리지 않습니다.',
+      '<b>격자 위치 맞추기</b>(원본 보존): 원본을 칸으로 나누는 시작 위치를 9가지로 시험해, 선이 두 칸에 걸쳐 흐려지는 곳이 가장 적은 위치를 고릅니다. 결과가 한 칸 넓어질 수 있습니다.',
+      '<b>색 수 줄이기</b>: 결과에 쓰인 색을 8~32색으로 줄여 도트 그림처럼 색 면을 또렷하게 합니다. <b>선 다듬기(1px)</b>: 1픽셀 선이 꺾이는 곳의 ㄴ자 모서리 칸을 빼 계단을 매끄럽게 합니다. 둘 다 모든 방식에 적용됩니다.',
       '<b>작은 입선 보존</b>(원본 보존): 눈 두 개 사이 아래의 작은 입 선(ω 등)이 회색으로 뭉개지지 않게 원본 선 색으로 살립니다.',
     ])),
     section('JEV 판정', list([

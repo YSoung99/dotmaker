@@ -77,3 +77,37 @@ test('검정 테두리 겹침은 바깥 반투명 검정 계열만 같은 자리
   assert.equal(first.px[20], input.px[20]);
   assert.equal(core.stackDarkOutline(input, 500).px[8], core.pack(12, 18, 20, 254));
 });
+
+test('색 수 줄이기는 정한 색 수 이하로 줄이고 투명도는 그대로 둔다', () => {
+  const input = new core.Raster(16, 16);
+  for (let i = 0; i < 256; i++) input.px[i] = core.pack(i, (i * 7) % 256, 255 - i, i % 5 === 0 ? 200 : 255);
+  const output = core.reduceColors(input, 8);
+  assert.ok(new Set(Array.from(output.px, core.KEY)).size <= 8);
+  assert.deepEqual(Array.from(output.px, core.A), Array.from(input.px, core.A));
+});
+
+test('선 다듬기는 1픽셀 선의 ㄴ자 모서리만 빼고 굵은 칸은 둔다', () => {
+  const ink = core.pack(20, 20, 20), fill = core.pack(230, 200, 180);
+  const input = new core.Raster(8, 8);
+  // ㄴ자로 꺾이는 1픽셀 선: (1,1)→(1,3) 아래로, (1,3)→(4,3) 오른쪽으로. 꺾인 칸은 (1,3).
+  for (const [x, y] of [[1, 1], [1, 2], [1, 3], [2, 3], [3, 3], [4, 3]]) input.px[y * 8 + x] = ink;
+  // 2×2 검정 덩어리는 선이 아니므로 그대로.
+  for (const [x, y] of [[5, 5], [6, 5], [5, 6], [6, 6]]) input.px[y * 8 + x] = ink;
+  input.px[2 * 8 + 2] = fill; input.px[4 * 8 + 0] = fill;
+  const output = core.pixelPerfect(input);
+  assert.notEqual(output.px[3 * 8 + 1], ink);
+  for (const [x, y] of [[1, 1], [1, 2], [2, 3], [3, 3], [4, 3], [5, 5], [6, 5], [5, 6], [6, 6]]) assert.equal(output.px[y * 8 + x], ink);
+});
+
+test('격자 위치 맞추기는 두 칸에 걸쳐 흐려진 선을 한 칸에 모은다', () => {
+  // 30px 둥근 캐릭터를 12칸으로 줄이면 한 칸이 원본 2.5px. 3px 굵기 선(x = 13~15)이 칸 경계에 걸친다.
+  const source = new core.Raster(30, 30);
+  for (let y = 0; y < 30; y++) for (let x = 0; x < 30; x++) {
+    if ((x - 14.5) ** 2 + (y - 14.5) ** 2 <= 225) source.px[y * 30 + x] = x >= 13 && x < 16 ? core.pack(10, 10, 10) : core.pack(180, 90, 110);
+  }
+  const subject = source; // 배경 분리를 마친 캐릭터 그림과 같은 Raster
+  const darkest = reduced => Math.max(...reduced.cells.map(c => (c.cover > 0 ? c.dark : 0)));
+  const plain = core.reduceDirect(subject, 16, 16), aligned = core.reduceAligned(subject, 16, 16);
+  assert.ok(darkest(plain) < 90);
+  assert.equal(darkest(aligned), 100);
+});

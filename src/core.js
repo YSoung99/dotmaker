@@ -381,7 +381,8 @@ export const dotMethodName = method => DOT_METHODS.find(([id]) => id === method)
 
 // boundary·transparency·colors·cleanup은 JEV 채색 후보(ColorReducer)가 쓴다.
 export const defaultSettings = () => ({ boundary: true, transparency: 80, colors: 12, cleanup: 1, method: 'faithful', crispOutline: false, cleanBlends: false, snapColors: false, preserveMouth: false, upscale: 'auto', background: 'auto',
-  sharpCells: false, hardEdge: false, outlineStack: 0, lonePixels: false, palette: 'off', paletteCustom: '' });
+  sharpCells: false, hardEdge: false, outlineStack: 0, lonePixels: false, palette: 'off', paletteCustom: '',
+  autoColors: 0, pixelPerfect: false, gridPhase: false });
 
 // ───────────────────────────── 색 줄이기
 export const ColorReducer = {
@@ -804,9 +805,96 @@ export function lockPalette(input, colors) {
   return output;
 }
 
-/** 모든 방식 공통 마무리: 외톨이 점과 팔레트 정리 뒤에 가장자리 알파를 처리한다. */
+const linear = c => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+/** OKLab(밝기·색 차이를 사람 눈에 가깝게 재는 색 공간) */
+function oklab(p) {
+  const r = linear(R(p)), g = linear(G(p)), b = linear(B(p));
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return [0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s, 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+    0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s];
+}
+const labDistance = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
+
+/**
+ * 색 수 줄이기: 그림에 쓰인 색을 count색으로 줄인다(투명도는 그대로).
+ * 넓은 면이 색을 다 가져가 눈 같은 작은 색이 사라지지 않게, OKLab에서 이미 고른 색과 가장 먼 색을 먼저 고른다
+ * (거리 × √쓰인 칸 수). 그 뒤 k-평균으로 다듬고, 묶음마다 실제로 쓰인 색 중 중심에 가장 가까운 색을 쓴다.
+ */
+export function reduceColors(input, count) {
+  const bins = new Map();
+  for (const p of input.px) {
+    if (A(p) < 128) continue;
+    const bin = bins.get(KEY(p));
+    if (bin) bin.n++; else bins.set(KEY(p), { color: withAlpha(p, 255), lab: oklab(p), n: 1 });
+  }
+  const points = [...bins.values()];
+  if (points.length <= count) return input;
+  let centers = [points.reduce((a, b) => (b.n > a.n ? b : a)).lab];
+  const gap = points.map(q => labDistance(q.lab, centers[0]));
+  while (centers.length < count) {
+    let pick = -1, best = 0;
+    points.forEach((q, i) => { const score = gap[i] * Math.sqrt(q.n); if (score > best) { best = score; pick = i; } });
+    if (pick < 0) break;
+    centers.push(points[pick].lab);
+    points.forEach((q, i) => { gap[i] = Math.min(gap[i], labDistance(q.lab, points[pick].lab)); });
+  }
+  const closest = (lab, list) => { let k = 0; for (let j = 1; j < list.length; j++) if (labDistance(lab, list[j]) < labDistance(lab, list[k])) k = j; return k; };
+  let groups = [];
+  for (let round = 0; round < 4; round++) {
+    groups = points.map(q => closest(q.lab, centers));
+    const sums = centers.map(() => [0, 0, 0, 0]);
+    points.forEach((q, i) => { const sum = sums[groups[i]], weight = Math.sqrt(q.n); for (let c = 0; c < 3; c++) sum[c] += q.lab[c] * weight; sum[3] += weight; });
+    centers = sums.map((sum, k) => (sum[3] ? [sum[0] / sum[3], sum[1] / sum[3], sum[2] / sum[3]] : centers[k]));
+  }
+  const chosen = centers.map((c, k) => points.filter((_, i) => groups[i] === k).reduce((a, q) => (!a || labDistance(q.lab, c) < labDistance(a.lab, c) ? q : a), null))
+    .filter(Boolean);
+  const chosenLab = chosen.map(q => q.lab), cache = new Map(), output = input.clone();
+  for (let i = 0; i < output.px.length; i++) {
+    const p = output.px[i];
+    if (A(p) === 0) continue;
+    let color = cache.get(KEY(p));
+    if (color === undefined) cache.set(KEY(p), color = chosen[closest(oklab(p), chosenLab)].color);
+    output.px[i] = withAlpha(color, A(p));
+  }
+  return output;
+}
+
+/**
+ * 선 다듬기(pixel-perfect): 1픽셀 선이 꺾이는 곳의 ㄴ자 모서리 칸을 빼 계단을 매끄럽게 한다.
+ * 선 칸(어두운 불투명 칸) 중 둘레 8칸의 선 칸이 가로 하나·세로 하나뿐인 칸만 뺀다(대각선으로 이어진다).
+ * 뺀 칸은 둘레의 선이 아닌 칸에서 더 많은 쪽(투명 또는 가장 흔한 색)으로 채운다.
+ */
+export function pixelPerfect(input) {
+  const output = input.clone(), { grid } = input, px = output.px, w = grid.w;
+  const line = i => A(px[i]) >= 128 && light(px[i]) < 110;
+  for (let i = 0; i < grid.count; i++) {
+    if (!line(i)) continue;
+    const x = i % w, y = (i - x) / w, around = [];
+    grid.each8(i, j => { if (line(j)) around.push(j); });
+    if (around.length !== 2) continue;
+    const horizontal = around.find(j => Math.floor(j / w) === y), vertical = around.find(j => j % w === x);
+    if (horizontal === undefined || vertical === undefined) continue;
+    const counts = new Map();
+    let clear = 0, solid = 0;
+    grid.each8(i, j => {
+      if (line(j)) return;
+      if (A(px[j]) < 128) { clear++; return; }
+      solid++;
+      counts.set(px[j], (counts.get(px[j]) ?? 0) + 1);
+    });
+    if (clear >= solid) px[i] = CLEAR;
+    else px[i] = [...counts].reduce((a, b) => (b[1] > a[1] ? b : a))[0];
+  }
+  return output;
+}
+
+/** 모든 방식 공통 마무리: 색 수·선·외톨이 점과 팔레트 정리 뒤에 가장자리 알파를 처리한다. */
 function finishDot(result, settings) {
   let image = result.image;
+  if (settings.autoColors > 0) image = reduceColors(image, settings.autoColors);
+  if (settings.pixelPerfect) image = pixelPerfect(image);
   if (settings.lonePixels) image = lonePixels(image);
   if (settings.palette && settings.palette !== 'off') image = lockPalette(image, paletteColors(settings));
   if (settings.hardEdge) image = hardEdge(image);
@@ -819,7 +907,8 @@ export function render(subject, reduced, settings) {
 }
 export function dotStatus(settings, dotted) {
   const layers = outlineStackLayers(settings.outlineStack);
-  const done = [settings.lonePixels && '외톨이 점 정리', settings.palette && settings.palette !== 'off' && paletteColors(settings).length > 0 && '팔레트 고정',
+  const done = [settings.gridPhase && settings.method === 'faithful' && '격자 위치 맞춤', settings.autoColors > 0 && `${settings.autoColors}색`,
+    settings.pixelPerfect && '선 다듬기', settings.lonePixels && '외톨이 점 정리', settings.palette && settings.palette !== 'off' && paletteColors(settings).length > 0 && '팔레트 고정',
     settings.hardEdge && '가장자리 또렷', !settings.hardEdge && layers > 1 && `검정 테두리 ${layers}장 겹침`].filter(Boolean);
   return methodStatus(settings, dotted) + (done.length ? '  ·  ' + done.join(' · ') : '');
 }
@@ -834,10 +923,14 @@ function methodStatus(settings, dotted) {
 // ───────────────────────────── 원본 보존 (맥 시험판 DotMaker 100-100에서 옮김)
 // 원본 픽셀이 최종 격자 한 칸에 걸치는 넓이만큼 그대로 평균 낸다(중간 축소 없음).
 
-/** 원본 칸이 목표 칸에 걸치는 길이. 단위는 목표 칸 하나 = source. */
-function overlaps(source, target) {
-  return Array.from({ length: target }, (_, cell) => {
-    const start = cell * source, end = (cell + 1) * source, list = [];
+/**
+ * 원본 칸이 목표 칸에 걸치는 길이. 단위는 목표 칸 하나 = source.
+ * shift(0 ~ source-1)만큼 격자를 앞으로 당기면 끝에 칸이 하나 더 생긴다.
+ */
+function overlaps(source, target, shift = 0) {
+  const total = source * target;
+  return Array.from({ length: target + (shift > 0 ? 1 : 0) }, (_, cell) => {
+    const start = Math.max(0, cell * source - shift), end = Math.min(total, (cell + 1) * source - shift), list = [];
     for (let pixel = Math.floor(start / target); pixel <= Math.floor((end - 1) / target); pixel++) {
       list.push([pixel, Math.min(end, (pixel + 1) * target) - Math.max(start, pixel * target)]);
     }
@@ -845,13 +938,13 @@ function overlaps(source, target) {
   });
 }
 
-export function reduceDirect(subject, w, h) {
+export function reduceDirect(subject, w, h, phase = [0, 0]) {
   if (!(w >= 16 && w <= 512 && h >= 16 && h <= 512)) fail('dimensions');
   const scale = Math.min((w - 4) / subject.grid.w, (h - 4) / subject.grid.h);
-  const sw = Math.max(1, Math.round(subject.grid.w * scale));
-  const sh = Math.max(1, Math.round(subject.grid.h * scale));
+  const columns = overlaps(subject.grid.w, Math.max(1, Math.round(subject.grid.w * scale)), Math.round(phase[0] * subject.grid.w));
+  const rows = overlaps(subject.grid.h, Math.max(1, Math.round(subject.grid.h * scale)), Math.round(phase[1] * subject.grid.h));
+  const sw = columns.length, sh = rows.length;
   const x = Math.trunc((w - sw) / 2), y = Math.trunc((h - sh) / 2);
-  const columns = overlaps(subject.grid.w, sw), rows = overlaps(subject.grid.h, sh);
   const area = subject.grid.w * subject.grid.h, sp = subject.px, sW = subject.grid.w;
   const output = new Raster(w, h);
   const cells = Array.from({ length: w * h }, () => ({ fill: CLEAR, ink: BLACK, cover: 0, dark: 0, accent: 0, accentColor: CLEAR }));
@@ -881,6 +974,23 @@ export function reduceDirect(subject, w, h) {
     }
   }
   return { image: output, cells, contentRect: { x, y, w: sw, h: sh } };
+}
+
+/**
+ * 격자 위치 맞추기: 칸 시작 위치를 가로·세로 0·1/3·2/3칸씩 옮겨 9가지로 읽고,
+ * 선이 칸에 반쯤 걸쳐 흐려진 정도(어두운 비율이 50%에 가까운 칸)와 반쯤 덮인 가장자리 칸이 가장 적은 것을 고른다.
+ */
+export function reduceAligned(subject, w, h) {
+  let best = null, bestBlur = Infinity;
+  for (const py of [0, 1 / 3, 2 / 3]) {
+    for (const px of [0, 1 / 3, 2 / 3]) {
+      const reduced = reduceDirect(subject, w, h, [px, py]);
+      let blur = 0;
+      for (const c of reduced.cells) if (c.cover > 0) blur += Math.min(c.dark, 100 - c.dark) * c.cover / 255 + Math.min(c.cover, 255 - c.cover) / 2.55;
+      if (blur < bestBlur) { best = reduced; bestBlur = blur; }
+    }
+  }
+  return best;
 }
 
 /**
