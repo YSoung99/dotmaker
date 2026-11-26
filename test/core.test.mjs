@@ -20,24 +20,16 @@ const original = premultiplied(character(120, 120));
 const SIZE = 50;
 const matchSnapshot = snapshots('core');
 
-/** worker.js의 finish()와 같은 갈래: 원본 보존·원본 직행은 원본에서 바로 격자를 읽는다. */
+/** worker.js의 finish()와 같은 갈래: 원본 보존은 원본에서 바로 격자를 읽는다. */
 function dot(settings) {
-  if (settings.method === 'faithful') {
-    const subject = core.Subject.extract(original, null, true);
-    return core.render(subject, core.reduceDirect(subject, SIZE, SIZE), settings);
-  }
-  const prepared = core.prepare(original, SIZE, SIZE);
-  const reduced = settings.method === 'direct' ? core.reduceDirect(prepared.subject, SIZE, SIZE) : prepared.reduced;
-  return core.render(prepared.subject, reduced, settings);
+  const subject = core.Subject.extract(original, null, true);
+  return core.render(subject, core.reduceDirect(subject, SIZE, SIZE), settings);
 }
 
 const variants = {
   '원본 보존': { method: 'faithful' },
   '원본 보존 + 또렷하게·바깥 외곽선·색 맞추기·섞인 색·입선': { method: 'faithful', sharpCells: true, crispOutline: true, snapColors: true, cleanBlends: true, preserveMouth: true },
-  '원본 색 살림': { method: 'soft' },
-  '베리 잉크': { method: 'berry' },
-  '2.0 방식 2줄 외곽선': { method: 'basic', width: 2 },
-  '원본 직행 + 반투명 없애기·외톨이 점·PICO-8': { method: 'direct', hardEdge: true, lonePixels: true, palette: 'pico8' },
+  '원본 보존 + 반투명 없애기·외톨이 점·PICO-8': { method: 'faithful', hardEdge: true, lonePixels: true, palette: 'pico8' },
 };
 
 for (const [name, change] of Object.entries(variants)) {
@@ -61,20 +53,6 @@ test('바깥 외곽선은 반투명 장식과 그림자의 알파를 바꾸지 �
   input.px[12] = core.pack(110, 110, 110, 100);
   const output = core.crispOutline(input);
   assert.deepEqual(Array.from(output.px, core.A), Array.from(input.px, core.A));
-});
-
-test('그림 전체 변환은 원본 색 살림과 베리 잉크에서 흰 배경을 유지한다', () => {
-  const subject = new core.Raster(64, 64);
-  subject.px.fill(core.pack(255, 255, 255));
-  for (let y = 23; y < 42; y++) {
-    for (let x = 23; x < 42; x++) subject.px[y * 64 + x] = core.pack(210, 40, 25);
-  }
-  const reduced = core.reduce(subject, 50, 50);
-  for (const method of ['soft', 'berry']) {
-    const settings = { ...core.defaultSettings(), method };
-    const result = core.render(subject, reduced, settings, null, true);
-    assert.ok(result.image.px.filter(pixel => core.A(pixel) > 0).length > 2000, method);
-  }
 });
 
 test('검정 테두리 겹침은 바깥 반투명 검정 계열만 같은 자리에서 겹친다', () => {
