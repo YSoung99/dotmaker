@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('dotmakerDesktop', {
   clearCloudKey: id => ipcRenderer.invoke('cloud:clearKey', id),
   pickFolder: () => ipcRenderer.invoke('batch:pickFolder'),
   writeToFolder: (name, png) => ipcRenderer.invoke('batch:write', name, png),
+  resizeAdaptive: (source, width, height) => ipcRenderer.invoke('dot:resizeAdaptive', source, width, height),
   // 완성 PNG 저장은 윈도우에서만 연다(다른 OS는 기존 흐름).
   ...(process.platform === 'win32' ? {
     saveResultPNG: (name, png, chooseLocation, rememberedFolder) => ipcRenderer.invoke('result:savePNG', name, png, Boolean(chooseLocation), rememberedFolder ?? null),

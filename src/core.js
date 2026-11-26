@@ -409,10 +409,19 @@ export function reduce(subject, w, h) {
 }
 
 // ───────────────────────────── 2.0 방식: 도트화
+export const DOT_METHODS = [
+  ['faithful', '원본 보존'],
+  ['dpid', 'DPID'],
+  ['ssim', 'SSIM 축소'],
+  ['adaptive', '내용 적응형 축소'],
+  ['mks', 'Magic Kernel Sharp'],
+];
+export const dotMethodName = method => DOT_METHODS.find(([id]) => id === method)?.[1];
+
 // method: 'berry' 베리 잉크 · 'basic' 2.0 방식 · 'soft' 원본 색 살림(개선판 '약하게', 색 수는 softColors)
 // softLines: 원본 색 살림에서 선을 1픽셀로 정리(원본에서 선 줄기 찾기) · softVivid: 원본 색 살림에서 채도 25% 올리기
 // softClean: 원본 색 살림에서 바깥 테두리를 순검정 1px로 잇고 색 면 정리(비슷한 색 합치기·혼자 떨어진 점 지우기)
-export const defaultSettings = () => ({ width: 1, boundary: true, transparency: 80, colors: 12, cleanup: 1, method: 'faithful', aiLines: false, softColors: 24, softLines: true, softVivid: true, softClean: true, crispOutline: false, cleanBlends: false, snapColors: false, preserveMouth: false, upscale: 'auto',
+export const defaultSettings = () => ({ width: 1, boundary: true, transparency: 80, colors: 12, cleanup: 1, method: 'faithful', aiLines: false, softColors: 24, softLines: true, softVivid: true, softClean: true, crispOutline: false, cleanBlends: false, snapColors: false, preserveMouth: false, upscale: 'auto', background: 'auto',
   sharpCells: false, hardEdge: false, outlineStack: 0, lonePixels: false, keepAccents: false, palette: 'off', paletteCustom: '' });
 
 class Palette {
@@ -2251,6 +2260,8 @@ function methodStatus(settings, dotted) {
     const extras = [settings.sharpCells && '또렷하게', settings.snapColors && '원본 색 맞추기', settings.cleanBlends && '경계 섞인 색 정리', settings.preserveMouth && '작은 입선 보존', settings.crispOutline && '바깥 외곽선 원본 선 색'].filter(Boolean);
     return `원본 보존  ·  ${dotted.image.grid.w}×${dotted.image.grid.h} px  ·  투명 PNG${extras.length ? '  ·  ' + extras.join(' · ') : ''}`;
   }
+  const method = dotMethodName(settings.method);
+  if (method) return `${method}  ·  ${dotted.image.grid.w}×${dotted.image.grid.h} px  ·  투명 PNG`;
   const colors = `실제 ${ColorReducer.count(dotted.image)}색`;
   if (settings.method === 'soft') {
     // 가장자리 반투명 칸은 같은 색도 알파에 따라 값이 조금씩 달라 따로 세지 않는다(불투명 칸의 색 수).

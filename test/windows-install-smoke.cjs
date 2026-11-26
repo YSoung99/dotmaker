@@ -8,6 +8,7 @@ const path = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
 const { version } = require('../package.json');
 const { expression, expected } = require('./outline-scenario.cjs');
+const { dotResizeExpression, dotResizeExpected } = require('./dot-resize-scenario.cjs');
 const { lab2Expression, lab2Expected } = require('./lab2-scenario.cjs');
 
 async function findPage(debugPortFile, app) {
@@ -106,6 +107,9 @@ async function main() {
     assert.equal(first.readUInt32BE(16), 100);
     assert.equal(first.readUInt32BE(20), 100);
     assert.deepEqual(first, second);
+    const dotResize = await evaluate(socket, dotResizeExpression);
+    assert.deepEqual(dotResize, dotResizeExpected);
+    console.log('윈도우 설치판 도트 축소 방식 검증 통과', dotResize);
     const lab2 = await evaluate(socket, lab2Expression);
     assert.deepEqual(lab2, lab2Expected);
     console.log('윈도우 설치판 실험실 2 검증 통과', lab2);

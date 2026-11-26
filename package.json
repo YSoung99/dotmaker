@@ -1,7 +1,7 @@
 {
   "name": "dotmaker",
   "productName": "도트메이커",
-  "version": "3.12.1",
+  "version": "3.13.0",
   "description": "캐릭터 그림을 원본 그대로 살린 도트 그림으로 바꾸는 프로그램",
   "author": "YSoung99",
   "license": "MIT",
@@ -13,9 +13,9 @@
     "build": "node tools/build.mjs",
     "test": "node --test \"test/*.test.mjs\"",
     "start": "node tools/build.mjs && electron .",
-    "dist:win": "node tools/build.mjs && electron-builder --win nsis --x64 --publish never",
-    "dist:mac": "node tools/build.mjs && electron-builder --mac dmg zip --arm64 --publish never -c.productName=DotMaker",
-    "dist:linux": "node tools/build.mjs && electron-builder --linux AppImage deb --x64 --publish never -c.productName=DotMaker",
+    "dist:win": "node tools/build.mjs win32 x64 && electron-builder --win nsis --x64 --publish never",
+    "dist:mac": "node tools/build.mjs darwin arm64 && electron-builder --mac dmg zip --arm64 --publish never -c.productName=DotMaker",
+    "dist:linux": "node tools/build.mjs linux x64 && electron-builder --linux AppImage deb --x64 --publish never -c.productName=DotMaker",
     "dist": "npm run dist:win && npm run dist:mac && npm run dist:linux"
   },
   "build": {
@@ -32,7 +32,13 @@
       "output": "release"
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "extraResources": [
+        {
+          "from": "dist/native/dotmaker-adaptive.exe",
+          "to": "dotmaker-adaptive.exe"
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,
@@ -40,6 +46,12 @@
       "shortcutName": "도트메이커"
     },
     "mac": {
+      "extraResources": [
+        {
+          "from": "dist/native/dotmaker-adaptive",
+          "to": "dotmaker-adaptive"
+        }
+      ],
       "target": [
         "dmg",
         "zip"
@@ -48,6 +60,12 @@
       "identity": null
     },
     "linux": {
+      "extraResources": [
+        {
+          "from": "dist/native/dotmaker-adaptive",
+          "to": "dotmaker-adaptive"
+        }
+      ],
       "target": [
         "AppImage",
         "deb"
@@ -72,7 +90,8 @@
   },
   "devDependencies": {
     "electron": "45.2.3",
-    "electron-builder": "26.18.0"
+    "electron-builder": "26.18.0",
+    "pica": "10.0.3"
   },
   "dependencies": {
     "electron-updater": "6.8.11"

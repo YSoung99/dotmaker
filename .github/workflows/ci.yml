@@ -18,6 +18,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/imago/go.mod
+          cache-dependency-path: tools/imago/go.sum
       - run: npm ci --ignore-scripts
       - run: node tools/build.mjs
       - run: npm test
@@ -30,6 +34,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/imago/go.mod
+          cache-dependency-path: tools/imago/go.sum
       - run: npm ci
       - run: npm run dist:win
         env:

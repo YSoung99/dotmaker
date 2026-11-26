@@ -136,7 +136,7 @@ async function labBatch(files) {
       // 설정은 시작할 때 고정하고, 축소 비율은 각 그림 크기에 맞춰 계산한다. 'labBatch'는 화면의 실험 탭 계산에 밀려 버려지지 않는다.
       const done = await engine.request('labBatch', { source, options: labOptions(source, snapshot) }, label);
       const picture = scaled({ w: done.w, h: done.h, bytes: done.bytes }, scale);
-      const blob = await new Promise(resolve => toCanvas(picture).toBlob(resolve, 'image/png'));
+      const blob = await encodePNG(picture);
       await desktop.writeToFolder(outputName(file.name, 'lab', done, scale), new Uint8Array(await blob.arrayBuffer()));
       saved++;
     } catch (error) {

@@ -27,6 +27,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/imago/go.mod
+          cache-dependency-path: tools/imago/go.sum
       - name: 태그와 package.json 버전이 같은지 확인
         shell: bash
         run: |

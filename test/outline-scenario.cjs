@@ -22,7 +22,7 @@ const expression = `(async () => {
 
     await until(() => number());
     const upscale = [...document.querySelectorAll('[aria-label="AI 업스케일"] button')];
-    upscale.find(button => button.textContent === '끄기').click();
+    upscale.find(button => button.textContent === '안 함').click();
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 64;
     const ctx = canvas.getContext('2d');

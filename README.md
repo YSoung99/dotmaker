@@ -47,16 +47,17 @@ chmod +x DotMaker-*-linux-x86_64.AppImage
 
 ## ✨ 할 수 있는 것
 
-- **원본 보존** 도트화(결과 크기 50×50 ~ 200×200), 원본 색 살림 · 베리 잉크 · 2.0 방식 · 원본 직행
-- **AI 업스케일(ESRGAN)**: 도트화하기 전에 원본을 4배로 키워 흐린 선·잡티를 정리합니다. 자동(원본이 결과 크기의 4배보다 작을 때만) · 6B(더 깔끔) · v3(더 빠름) · 끄기 중에서 고르고, AI 보정 탭의 다시 그린 그림에도 적용됩니다.
+- **도트화**(결과 크기 50×50 ~ 200×200): 원본 보존 · DPID · SSIM 축소 · 내용 적응형 축소 · Magic Kernel Sharp. 네 축소 방식 모두 같은 캐릭터 분리와 배치를 씁니다. 내용 적응형 축소는 큰 그림에서 시간이 더 걸립니다.
+- **AI 업스케일(ESRGAN)**: 도트화하기 전에 원본을 4배로 키워 흐린 선·잡티를 정리합니다. 자동(원본이 결과 크기의 4배보다 작을 때만) · 6B(더 깔끔) · v3(더 빠름) · **안 함** 중에서 고르고, AI 보정 탭의 다시 그린 그림에도 적용됩니다.
 - 바깥 외곽선 1픽셀(원본 선 색) · 원본 색 맞추기 · 경계 섞인 색 정리 · 작은 입선 보존, **JEV 부위별 진단 · 섞인 색 판정 · 선·색 비교 · 자동 선택**([LLM Gateway](https://llmgateway.io) API 키 필요, 판정할 때 그림이 전송되고 요금은 내 계정에 청구)
 - AI 보정: PixelLab · Gemini · OpenAI(각 서비스의 내 API 키 필요)
 - 맥·윈도우·리눅스 프로그램은 **같은 코드로 만들어** 기능과 결과가 같습니다.
-- AI 기능(AI 업스케일·배경 분리·선 추출)에 쓰는 파일은 **처음 쓸 때 한 번 자동으로 받습니다**(인터넷 필요). 그래서 설치 파일이 가볍습니다.
+- AI 기능(AI 업스케일·배경 분리·부위 선택)에 쓰는 파일은 **처음 쓸 때 한 번 자동으로 받습니다**(인터넷 필요). 그래서 설치 파일이 가볍습니다.
 - **프로그램 안에서 업데이트**(윈도우·맥·리눅스 AppImage·deb): 켤 때마다 새 버전이 있는지 확인해, 있으면 지금 업데이트할지 묻습니다. '지금 업데이트'를 고르면 뒤에서 받아 바로 설치한 뒤 다시 켜지고, 새 버전이 없으면 아무것도 묻지 않습니다. 위쪽 **업데이트 확인** 버튼으로 언제든 직접 확인할 수 있습니다. deb판은 설치할 때 컴퓨터 암호를 한 번 묻습니다. 업데이트가 안 되면 릴리스 페이지로 바로 갈 수 있습니다.
 - **품질 옵션**: **또렷하게(작은 크기용)** 는 칸 색을 평균 내지 않고 선·면 색 하나로 골라 작은 크기에서 뭉개짐을 줄입니다. 가장자리 반투명 없애기 · 강조색 지키기 · 팔레트 고정 · 외톨이 점 정리도 고를 수 있습니다.
 - **실험 탭(베타)**: 도트 크기와 색 수만 골라 그림을 도트로 바꿉니다. **배경 지우기**를 끄면 배경 있는 일러스트 전체를 배경째 바꾸고, 줄이는 방식(평균·투표)을 고를 수 있으며, 자동 추출(원본 색감 유지)과 커스텀 팔레트(정한 색만)를 고를 수 있습니다.
 - **실험실 2**: 원본에서 눈·입·장식을 드래그해 중요한 색과 선을 보호하거나, 색면의 잔색을 먼저 정리해 도트로 줄입니다. **AI로 부위 선택**을 쓰면 클릭한 부위만 보호하거나 정리합니다. MobileSAM은 첫 사용 때 모델 약 45MB를 받고 이미지는 기기에서 처리합니다.
+- **배경 분리**: 자동 분리에서 흰 몸통까지 빠지는 그림은 도트화 탭의 **AI 분리**로 다시 시도하거나 **배경 유지**로 원본 전체를 줄일 수 있습니다. PNG 저장은 반투명 픽셀의 RGBA를 그대로 기록합니다.
 - **결과 보기**: 미리보기를 맞춤·1×~8×로 키워 보고, 격자로 도트 칸을 확인하고, 배경을 체커·흰색·검정으로 바꿀 수 있습니다.
 - **편의 기능**: 마지막 설정 기억, 캡처한 그림 붙여넣기(Ctrl/⌘+V), 결과 복사(Ctrl/⌘+C), 여러 장을 한꺼번에 도트화해 폴더에 저장, 결과 자리에서 **원본 보기**로 비교.
 - AI 업스케일이 어떤 이유로 실패하면 그림은 업스케일 없이 도트화하고, 상태줄에 'AI 업스케일 건너뜀'으로 알려 줍니다.
@@ -74,14 +75,14 @@ chmod +x DotMaker-*-linux-x86_64.AppImage
 | 화면(버튼·문구·설명서) | `src/app.js`, `src/app.html` |
 | 실험 탭(베타) | 화면 `src/lab.js`, 계산 `src/lab-core.js`, 메이플 램프 `src/maple.js` |
 | 실험실 2 | 화면 `src/lab2.js`, 계산 `src/lab2-core.js`, 클릭 선택 `src/mobile-sam.js` |
-| 도트화 계산 | `src/core.js` |
-| AI(업스케일·배경 분리·선 추출) | `src/ai.js`, `src/worker.js` |
+| 도트화 계산 | `src/core.js`, `src/dot-resize.js`, `tools/imago/` |
+| AI(업스케일·배경 분리·부위 선택) | `src/ai.js`, `src/worker.js` |
 | AI 보정(클라우드)·JEV | `src/cloud.js`, `src/jev-app.js`, `src/jev-core.js` |
 | 프로그램 창·키 저장(JEV·클라우드 AI 키)·업데이트 | `desktop/main.cjs`, `desktop/preload.cjs`, `desktop/mac-updater.cjs`(맥) |
 | 프로그램 안 업데이트가 보는 저장소 | [`package.json`](package.json)의 `build.publish` |
 | 테스트(결과 그림 스냅샷) | `test/` |
 
-Node.js 20 이상이 필요합니다.
+빌드에는 Node.js 20 이상과 Go 1.26 이상이 필요합니다. 설치한 앱에서 도트화할 때는 Go나 Python을 설치할 필요가 없습니다.
 
 ```bash
 npm install        # 처음 한 번
@@ -100,7 +101,6 @@ GitHub Actions: PR·푸시마다 빌드와 테스트를 돌리고, `v3.11.1`처�
 
 AI 업스케일 모델(ONNX)은 [models-esrgan 릴리스](https://github.com/YSoung99/dotmaker/releases/tag/models-esrgan)에 있고, [dotmaker-mac의 scripts/export-esrgan.py](https://github.com/YSoung99/dotmaker-mac/blob/main/scripts/export-esrgan.py)로 공식 가중치에서 다시 만들 수 있습니다.
 
-선 추출 AI 구조(`src/lines-graph.onnx`)와 가중치 목록(`src/lines-manifest.json`)은 [`tools/export-lines.py`](tools/export-lines.py)로 다시 만듭니다. torch 2.15.0 · transformers 4.57.6 · onnx 1.23.2가 있는 파이썬에서 `python3 tools/export-lines.py`를 실행하면 허깅페이스 원본 모델을 받아 두 파일을 덮어씁니다(이 판들이면 지금 파일과 바이트까지 같음, transformers 5.x는 안 됨).
 
 ## 최근 기능 한눈에 보기
 
@@ -115,6 +115,7 @@ AI 업스케일 모델(ONNX)은 [models-esrgan 릴리스](https://github.com/YSo
 
 ## 📝 업데이트 기록
 
+- **3.13.0**: **도트화** 탭의 방식을 원본 보존 · DPID · SSIM 축소 · 내용 적응형 축소 · Magic Kernel Sharp로 바꾸고 원본 색 살림 · 베리 잉크 · 2.0 방식 · 원본 직행을 뺐습니다. AI 업스케일에 **안 함**을 두고, **배경 분리**(자동 · AI 분리 · 배경 유지)를 고를 수 있으며, PNG 저장이 반투명 픽셀의 RGBA를 그대로 기록합니다.
 - **3.12.1**: **실험실 2**에 중요 영역 보호·색면 정리·AI 부위 선택을 추가하고 PAX와 Xprite를 제거했습니다. 원본에서 눈·입·장식을 표시해 작은 도트에서도 색과 선을 살리고, MobileSAM으로 클릭한 부위만 보호하거나 색면을 정리할 수 있습니다.
 - **3.12.0**: **실험실 2**를 추가했습니다. PAX는 지정한 크기와 색 수에 맞춰 그림을 도트로 바꾸고 반투명을 유지합니다. Xprite는 확대되거나 흐려진 도트의 격자를 복원해 원본과 비교할 수 있습니다.
 - **3.11.4**: 윈도우판에 **저장 위치 지정**을 추가했습니다. 켜면 PNG를 저장할 폴더와 파일명을 고를 수 있고, 다음 저장 창은 마지막으로 저장한 폴더에서 열립니다. 끄면 내 문서에 바로 저장합니다.
@@ -146,8 +147,8 @@ AI 업스케일 모델(ONNX)은 [models-esrgan 릴리스](https://github.com/YSo
 
 - AI 업스케일: [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) RealESRGAN_x4plus_anime_6B · realesr-animevideov3 (BSD-3-Clause) — ONNX로 바꿔 [models-esrgan 릴리스](https://github.com/YSoung99/dotmaker/releases/tag/models-esrgan)에 올린 것
 - 배경 분리: [skytnt/anime-seg](https://huggingface.co/skytnt/anime-seg) (Apache-2.0)
-- 선 추출: [p1atdev/MangaLineExtraction-hf](https://huggingface.co/p1atdev/MangaLineExtraction-hf) (MIT) — `src/lines-graph.onnx`는 이 모델의 구조를 ONNX로 옮긴 것
 - 클릭 선택: [MobileSAM](https://github.com/ChaoningZhang/MobileSAM) (Apache-2.0), [Acly ONNX 변환본](https://huggingface.co/Acly/MobileSAM)
+- 도트 축소: [imago](https://github.com/loov/imago) v0.1.0 (MIT), [pica](https://github.com/nodeca/pica) 10.0.3 (MIT)
 - 실행 도구: [onnxruntime-web](https://github.com/microsoft/onnxruntime) (MIT) · 프로그램 본체: [Electron](https://www.electronjs.org/) (MIT)
 
 README의 예시 고양이 그림은 이 저장소용으로 새로 그린 것입니다.

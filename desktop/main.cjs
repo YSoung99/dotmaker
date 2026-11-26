@@ -4,6 +4,9 @@
 const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { registerAdaptive } = require('./adaptive.cjs');
+
+registerAdaptive({ app, ipcMain });
 
 const keyFile = (name = 'jev') => path.join(app.getPath('userData'), `${name}-key.bin`);
 

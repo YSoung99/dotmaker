@@ -247,16 +247,9 @@ function compareJev() {
   });
 }
 
-const methodName = { faithful: '원본 보존', soft: '원본 색 살림', berry: '베리 잉크', basic: '2.0 방식', direct: '원본 직행' };
-
-/** 차이가 눈에 보이는 설정 후보만 만든다. 외곽선 굵기·경계색 같은 취향 설정은 그대로 둔다(맥판과 같음). */
 function jevVariants(base) {
-  const options = [base];
-  for (const [method, colors] of [['berry', 10], ['berry', 12], ['berry', 16], ['basic', 12]]) {
-    const item = { ...base, method, colors, cleanup: 1 };
-    if (!options.some(o => JSON.stringify(o) === JSON.stringify(item))) options.push(item);
-  }
-  return options;
+  const others = DOT_METHODS.filter(([method]) => method !== base.method);
+  return [base, ...others.map(([method]) => ({ ...base, method }))];
 }
 
 /** JEV 자동 선택(원본 보존이 아닌 방식): 설정 후보를 나란히 보여 주고 가장 나은 것을 고른다. */
@@ -272,7 +265,7 @@ function autoJev() {
     store.set('settings', chosen);
     submittedSettings = { ...chosen };
     state.product = { reduced: result.reduced, dotted: result.dotted,
-      status: `JEV가 후보 ${list.length}개를 나란히 비교해 ‘${methodName[chosen.method]} ${chosen.colors}색’을 골랐습니다 (확률 ${Math.round(verdict.scores[verdict.index] * 100)}%).` };
+      status: `JEV가 후보 ${list.length}개를 나란히 비교해 ‘${dotMethodName(chosen.method)}’을 골랐습니다 (확률 ${Math.round(verdict.scores[verdict.index] * 100)}%).` };
   });
 }
 

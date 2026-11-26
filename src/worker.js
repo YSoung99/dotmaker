@@ -1,6 +1,6 @@
 // 작업자(Web Worker): 변환과 AI를 화면과 따로 돌려 처리 중에도 창이 멈추지 않게 한다.
 // 일은 들어온 순서대로 하나씩 한다. 원본·캐릭터·선 지도는 여기 두고, 화면에는 결과 그림만 보낸다.
-let current = null; // { raw, wanted, upscaled, skipped, original, masked, subject, reduced, lines, faithful, whole }
+let current = null; // { raw, wanted, upscaled, skipped, background, subject, faithful, whole }
 
 const picture = raster => ({ w: raster.grid.w, h: raster.grid.h, bytes: raster.straightBytes() });
 
@@ -8,36 +8,20 @@ const picture = raster => ({ w: raster.grid.w, h: raster.grid.h, bytes: raster.s
 function faithfulParts() {
   const { w, h } = current;
   if (!current.faithful || current.faithful.w !== w || current.faithful.h !== h) {
-    const subject = current.faithful?.subject ?? (current.whole ? current.subject : Subject.extract(current.original, current.masked, true));
-    current.faithful = { w, h, subject, reduced: reduceDirect(subject, w, h) };
+    const subject = current.subject;
+    current.faithful = { w, h, subject, reduced: reduceDirect(subject, w, h), candidates: new Map() };
   }
   return current.faithful;
 }
 
-/** 원본 직행은 캐릭터는 그대로 두고, 축소만 원본에서 바로 격자를 읽는다(맥판과 같음). */
-function directParts() {
-  const { w, h } = current;
-  if (!current.direct || current.direct.w !== w || current.direct.h !== h) {
-    current.direct = { w, h, subject: current.subject, reduced: reduceDirect(current.subject, w, h) };
-  }
-  return current.direct;
-}
-
-function partsFor(method) {
-  if (method === 'faithful') return faithfulParts();
-  if (method === 'direct') return directParts();
-  current.reduced ??= reduce(current.subject, current.w, current.h);
-  return current;
-}
-
-function finish(id, settings) {
-  const parts = partsFor(settings.method);
-  const dotted = render(parts.subject, parts.reduced, settings, current.lines, current.whole);
+async function finish(id, settings, progress) {
+  const parts = faithfulParts();
+  const dotted = await renderDot(parts.subject, parts.reduced, settings, progress, parts.candidates);
   const reduced = picture(parts.reduced.image), dot = picture(dotted.image);
   const sharpened = current.upscaled ? ` · AI 업스케일 ${current.upscaled === 'esr6b' ? '6B' : 'v3'}`
-    : current.skipped ? ` · AI 업스케일 건너뜀(${current.skipped})` : '';
-  const whole = current.whole ? ' · 배경 분리 없이 그대로' : '';
-  self.postMessage({ id, type: 'done', reduced, dotted: dot, status: dotStatus(settings, dotted) + sharpened + whole },
+    : current.skipped ? ` · AI 업스케일 건너뜀(${current.skipped})` : ' · AI 업스케일 안 함';
+  const background = current.whole ? ' · 배경 분리 없이 그대로' : current.aiBackground ? ' · AI 배경 분리' : '';
+  self.postMessage({ id, type: 'done', reduced, dotted: dot, status: dotStatus(settings, dotted) + sharpened + background },
     [reduced.bytes.buffer, dot.bytes.buffer]);
 }
 
@@ -47,26 +31,23 @@ async function handle(job) {
     if (job.type === 'open') {
       const { original, w, h, settings } = job;
       current = await load(original, w, h, settings, progress, Boolean(job.whole));
-      finish(job.id, settings);
+      await finish(job.id, settings, progress);
     } else if (job.type === 'resize') {
       // 결과 크기가 바뀌면 '자동' AI 업스케일을 쓸지가 달라질 수 있다.
-      if (upscaleModel(current.raw, job.settings.upscale, Math.max(job.w, job.h)) !== current.wanted) {
-        current = await load(current.raw, job.w, job.h, job.settings, progress, current.whole);
+      if (needsReload(job.settings, job.w, job.h)) {
+        current = await load(current.raw, job.w, job.h, job.settings, progress, keepManualBackground(job.settings));
       } else {
         if (current.w !== job.w || current.h !== job.h) {
-          Object.assign(current, { w: job.w, h: job.h, reduced: null, direct: null, jevStrokes: null });
+          Object.assign(current, { w: job.w, h: job.h, jevStrokes: null });
         }
-        if (wantsLines(job.settings) && !current.lines) current.lines = await extractLines(current.subject, progress);
       }
-      finish(job.id, job.settings);
+      await finish(job.id, job.settings, progress);
     } else if (job.type === 'redot') {
       const { w, h } = current;
-      if (upscaleModel(current.raw, job.settings.upscale, Math.max(w, h)) !== current.wanted) {
-        current = await load(current.raw, w, h, job.settings, progress, current.whole);
-      } else if (wantsLines(job.settings) && !current.lines) {
-        current.lines = await extractLines(current.subject, progress);
+      if (needsReload(job.settings, w, h)) {
+        current = await load(current.raw, w, h, job.settings, progress, keepManualBackground(job.settings));
       }
-      finish(job.id, job.settings);
+      await finish(job.id, job.settings, progress);
     } else if (job.type === 'jev') {
       // JEV에 물을 항목(확대 그림·후보·바꿀 칸). 요청은 화면이 프로그램 본체를 거쳐 보낸다.
       const { subject, reduced } = faithfulParts();
@@ -84,16 +65,15 @@ async function handle(job) {
       self.postMessage({ id: job.id, type: 'done', candidates: fills.map(c => ({ label: c.label, picture: picture(c.image) })) });
     } else if (job.type === 'jevRender') {
       // JEV 자동 선택: 설정 후보마다 그린 결과
-      if (job.list.some(wantsLines) && !current.lines) current.lines = await extractLines(current.subject, progress);
-      const results = job.list.map(settings => {
-        const parts = partsFor(settings.method);
-        const dotted = render(parts.subject, parts.reduced, settings, current.lines, current.whole);
-        return { reduced: picture(parts.reduced.image), dotted: picture(dotted.image), status: dotStatus(settings, dotted) };
-      });
+      const parts = faithfulParts(), results = [];
+      for (const settings of job.list) {
+        const dotted = await renderDot(parts.subject, parts.reduced, settings, progress, parts.candidates);
+        results.push({ reduced: picture(parts.reduced.image), dotted: picture(dotted.image), status: dotStatus(settings, dotted) });
+      }
       self.postMessage({ id: job.id, type: 'done', results });
     } else if (job.type === 'subject') {
       // 클라우드 AI에 보낼 캐릭터 그림
-      const subject = picture(job.faithful ? faithfulParts().subject : current.subject);
+      const subject = picture(current.subject);
       self.postMessage({ id: job.id, type: 'done', subject }, [subject.bytes.buffer]);
     } else if (job.type === 'cutout') {
       // 실험 탭: 받은 그림에서 배경만 지운 캐릭터를 돌려준다(지금 열어 둔 그림은 건드리지 않는다).
@@ -129,9 +109,8 @@ async function handle(job) {
         status = `AI 도트 그림 · 배경 지움 · ${raster.grid.w}×${raster.grid.h}`;
       } else {
         const { image: source } = await tryUpscale(image, upscaleModel(image, settings.upscale, Math.max(w, h)), progress);
-        const prepared = await prepareAny(source, w, h, progress);
-        const lines = wantsLines(settings) ? await extractLines(prepared.subject, progress) : null;
-        const dotted = render(prepared.subject, prepared.reduced, settings, lines);
+        const { subject } = await prepareDotSubject(source, settings.background, progress);
+        const dotted = await renderDot(subject, reduceDirect(subject, w, h), settings, progress);
         result = dotted.image;
         status = `AI 그림을 도트화 · ${dotStatus(settings, dotted)}`;
       }
@@ -145,20 +124,27 @@ async function handle(job) {
   }
 }
 
-/** 원본 → (AI 업스케일) → 캐릭터 분리·축소·선 지도. raw는 처음 연 원본이고, AI 업스케일 설정이 바뀌면 여기서 다시 시작한다. */
-async function load(raw, w, h, settings, progress, whole = false) {
+/** 전처리 설정이 바뀌면 처음 연 원본부터 다시 처리한다. */
+function needsReload(settings, w, h) {
+  return settings.background !== current.background ||
+    upscaleModel(current.raw, settings.upscale, Math.max(w, h)) !== current.wanted;
+}
+
+const keepManualBackground = settings => current.manualWhole && current.background === settings.background;
+
+async function load(raw, w, h, settings, progress, manualWhole = false) {
   const wanted = upscaleModel(raw, settings.upscale, Math.max(w, h));
   const { image: original, upscaled, skipped } = await tryUpscale(raw, wanted, progress);
   let prepared;
+  const whole = manualWhole || settings.background === 'keep';
   try {
-    prepared = whole ? { ...prepare(original, w, h, null, false, true), masked: null } : await prepareAny(original, w, h, progress, settings.method === 'faithful');
+    prepared = whole ? { subject: Subject.whole(original), aiBackground: false } : await prepareDotSubject(original, settings.background, progress);
   } catch (error) {
     // 캐릭터 분리(배경 지우기)에서 막힌 것이면 화면이 '분리 없이 그대로 변환'을 권할 수 있게 알린다.
     error.canSkip = !whole;
     throw error;
   }
-  const lines = wantsLines(settings) ? await extractLines(prepared.subject, progress) : null;
-  return { raw, wanted, upscaled, skipped, original, w, h, masked: prepared.masked, subject: prepared.subject, reduced: prepared.reduced, lines, faithful: null, whole };
+  return { raw, wanted, upscaled, skipped, w, h, background: settings.background, ...prepared, faithful: null, whole, manualWhole };
 }
 
 /** AI 업스케일이 실패해도(파일을 못 받음 등) 그림은 연다: 키우지 않은 원본으로 도트화하고 이유를 남긴다. */
@@ -172,23 +158,25 @@ async function tryUpscale(image, model, progress) {
   }
 }
 
-/** 선 추출 AI는 베리 잉크·2.0 방식에서만 쓴다(원본 색 살림은 원본 선을 그대로 쓴다). */
-const wantsLines = settings => settings.aiLines && settings.method !== 'soft';
-
-/** 캐릭터 분리 + 축소. 밝은 단색·투명 배경이 아니면 AI 모델로 배경을 지운다. */
-async function prepareAny(image, w, h, progress, faithful = false) {
+/** 축소 방식에 앞서 공통으로 캐릭터를 분리한다. */
+async function prepareDotSubject(image, background, progress) {
+  if (background === 'keep') return { subject: Subject.whole(image), aiBackground: false };
+  if (background === 'ai') {
+    // 흰 몸통과 배경이 이어진 그림에서 밝은 배경 제거 규칙을 거치지 않는다.
+    const masked = await removeBackground(image, progress);
+    return { subject: Subject.extract(masked, null, true), aiBackground: true };
+  }
   try {
-    return { ...prepare(image, w, h), masked: null };
+    return { subject: Subject.extract(image, null, true), aiBackground: false };
   } catch (error) {
-    if (faithful && error.code === 'subject') {
-      const subject = Subject.extract(image, null, true);
-      return { subject, reduced: null, masked: null };
-    }
     if (error.code !== 'needsMask') throw error;
     const masked = await removeBackground(image, progress);
-    return { ...prepare(image, w, h, masked), masked };
+    return { subject: Subject.extract(image, masked, true), aiBackground: true };
   }
 }
 
 let queue = Promise.resolve();
-self.onmessage = event => { queue = queue.then(() => handle(event.data)); };
+self.onmessage = ({ data }) => {
+  if (data.type === 'adaptive-native-response') receiveNativeAdaptive(data);
+  else queue = queue.then(() => handle(data));
+};

@@ -15,5 +15,14 @@
 !/.github/
 /tools/*
 !/tools/build.mjs
+!/tools/build-imago.mjs
+!/tools/imago/
+/tools/imago/*
+!/tools/imago/go.mod
+!/tools/imago/go.sum
+!/tools/imago/main.go
+!/tools/imago/LICENSE*
+!/tools/imago/adaptive/
+!/tools/imago/adaptive/main.go
 !/tools/export-lines.py
 .DS_Store

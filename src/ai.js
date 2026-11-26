@@ -1,10 +1,6 @@
 // AI 기능(작업자 안에서 돈다). 실행 도구·모델은 files.js의 저장소에서 꺼내 쓰고, 없으면 한 번 받아 저장한다.
 // - 배경 분리: 맥판 Vision 대신 skytnt/anime-seg (isnetis.onnx)
-// - 선 추출: 맥판 lines.py와 같은 MangaLineExtraction. 구조(ONNX)는 이 파일에 들어 있고,
-//   가중치는 허깅페이스 원본(BF16 safetensors)을 Float32로 풀어 외부 데이터 'weights.bin'으로 넘긴다(tools/export-lines.py).
 const SEG_SIZE = 1024;
-const LINES_GRAPH = '__LINES_GRAPH__';
-const LINES_MANIFEST = '__LINES_MANIFEST__';
 
 async function download(id, progress) {
   const file = AI_FILES[id];
@@ -131,58 +127,6 @@ async function removeBackground(image, progress) {
     out[i * 4 + 3] = a;
   }
   return { w: w0, h: h0, data: out };
-}
-
-// ── 선 추출
-let linesSession = null;
-async function lineSession(progress) {
-  if (linesSession) return linesSession;
-  const ort = await loadOrt(progress);
-  const file = await aiFile('linesModel', progress);
-  progress('선 추출 AI 모델 준비 중');
-  const view = new DataView(file.buffer, file.byteOffset, file.byteLength);
-  const headerLength = Number(view.getBigUint64(0, true));
-  const header = JSON.parse(new TextDecoder().decode(file.subarray(8, 8 + headerLength)));
-  const start = 8 + headerLength;
-  const last = LINES_MANIFEST[LINES_MANIFEST.length - 1];
-  const weights = new Uint8Array(last[1] + last[2] * 4);
-  const out = new Uint32Array(weights.buffer);
-  for (const [key, offset, count] of LINES_MANIFEST) {
-    const info = header[key];
-    if (!info || info.dtype !== 'BF16') throw new DotError('선 추출 AI 모델 파일이 예상과 다릅니다.');
-    const base = start + info.data_offsets[0], first = offset / 4;
-    // BF16은 Float32의 위쪽 16비트라서 16비트 밀어 올리면 같은 값이다.
-    for (let k = 0; k < count; k++) out[first + k] = view.getUint16(base + k * 2, true) << 16;
-  }
-  const graph = Uint8Array.from(atob(LINES_GRAPH), c => c.charCodeAt(0));
-  linesSession = await ort.InferenceSession.create(graph, {
-    executionProviders: providers(),
-    externalData: [{ path: 'weights.bin', data: weights }],
-  });
-  return linesSession;
-}
-
-/** 캐릭터(subject)의 구조선 지도: 흰 바탕에 검은 선, 캐릭터와 같은 크기. 맥판 AIDot.extractLines와 같은 입력·출력. */
-async function extractLines(subject, progress) {
-  const session = await lineSession(progress);
-  progress('선 추출 AI가 원본의 선을 읽는 중');
-  const w = subject.grid.w, h = subject.grid.h;
-  const pw = Math.ceil(w / 16) * 16, ph = Math.ceil(h / 16) * 16;
-  const input = new Float32Array(pw * ph).fill(255);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const p = subject.px[y * w + x], pct = Math.floor(A(p) * 100 / 255);
-    const white = c => Math.floor((255 * (100 - pct) + c * pct + 50) / 100);
-    // 흰 바탕에 얹은 뒤 PIL 'L' 변환과 같은 회색
-    input[y * pw + x] = (white(R(p)) * 19595 + white(G(p)) * 38470 + white(B(p)) * 7471 + 0x8000) >> 16;
-  }
-  const tensor = new self.ort.Tensor('float32', input, [1, 1, ph, pw]);
-  const output = (await session.run({ [session.inputNames[0]]: tensor }))[session.outputNames[0]].data;
-  const lines = new Raster(w, h);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const v = Math.trunc(Math.min(255, Math.max(0, output[y * pw + x])));
-    lines.px[y * w + x] = pack(v, v, v);
-  }
-  return lines;
 }
 
 // ── AI 업스케일(ESRGAN): Real-ESRGAN(xinntao, BSD-3) 애니 모델 두 개를 ONNX로 바꾼 것(맥판과 같은 파일).

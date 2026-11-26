@@ -2,7 +2,7 @@
 const VERSION = '__VERSION__';  // tools/build.mjs가 package.json의 버전을 넣는다
 const STAGES = {
   // instruction: 탭 위 한 줄 안내, detail: ⓘ에 마우스를 올리면 보이는 자세한 설명
-  dot: { name: '도트화', instruction: '머리와 몸통을 구분해 검은 윤곽과 몸통 경계색을 적용합니다.' },
+  dot: { name: '도트화', instruction: '캐릭터를 원하는 크기의 투명 PNG로 바꿉니다.' },
   repair: { name: 'AI 보정', instruction: '클라우드 AI로 캐릭터를 도트 그림으로 다시 그립니다(내 API 키 필요).',
     detail: '클라우드 AI(PixelLab·Gemini·OpenAI)에 캐릭터를 보내 도트 그림으로 다시 그립니다. 쓰려면 그 서비스의 내 API 키가 필요합니다.' },
   lab: { name: '실험', instruction: '도트 크기와 색 수만 골라 그림을 도트로 바꿉니다.',
@@ -15,8 +15,10 @@ const STAGES = {
 const DOT_GUIDES = {
   faithful: { instruction: '원본의 선 굵기와 명암을 살려 도트로 바꿉니다.',
     detail: '원본 한 장을 열면 선 굵기와 명암을 살려 투명 PNG 크기에 맞춥니다. 원본에서 바로 격자 칸마다 색을 읽습니다.' },
-  soft: { instruction: '원본 색을 살리고 색 수만 줄여 도트로 바꿉니다.',
-    detail: '원본의 색을 살리고 색 수만 줄여 도트로 바꿉니다. 선은 원본에서 줄기를 찾아 1픽셀로 정리하고, 색은 조금 더 선명하게, 바깥 테두리와 색 면은 깔끔하게 정리합니다. 외곽선·선 추출·경계색은 베리 잉크·2.0 방식·원본 직행에서 씁니다.' },
+  dpid: { instruction: '작은 장식과 선을 살리며 부드럽게 축소합니다.' },
+  ssim: { instruction: '작은 칸에서도 주변 대비를 살려 눈·입·장식이 읽히게 축소합니다.' },
+  adaptive: { instruction: '원본의 색과 경계를 따라 축소합니다. 큰 그림에서는 시간이 더 걸립니다.' },
+  mks: { instruction: '윤곽이 부드럽게 이어지도록 줄이면서 가는 선을 살립니다.' },
 };
 
 const store = {
@@ -28,6 +30,8 @@ const store = {
 function savedSettings() {
   const base = defaultSettings(), saved = store.get('settings', {}) ?? {};
   for (const key of Object.keys(base)) if (typeof saved[key] === typeof base[key]) base[key] = saved[key];
+  if (!dotMethodName(base.method)) base.method = 'faithful';
+  if (!['auto', 'ai', 'keep'].includes(base.background)) base.background = 'auto';
   return base;
 }
 function savedView() {
@@ -86,7 +90,7 @@ const $ = id => document.getElementById(id);
 const engine = (() => {
   const code = document.querySelector('script[data-app]').textContent;
   const shared = code.slice(code.indexOf('/*SHARED-START*/'), code.indexOf('/*SHARED-END*/'));
-  const source = shared + '\n' + $('worker-src').textContent;
+  const source = `const nativeAdaptiveAvailable = ${Boolean(desktop?.resizeAdaptive)};\n` + shared + '\n' + $('worker-src').textContent;
   let worker;
   try {
     worker = new Worker(URL.createObjectURL(new Blob([source], { type: 'text/javascript' })));
@@ -105,6 +109,14 @@ const engine = (() => {
   const done = () => { running = null; if (waiting.length === 0) state.busy = null; pump(); update(); };
   if (worker) {
     worker.onmessage = ({ data }) => {
+      if (data.type === 'adaptive-native') {
+        desktop.resizeAdaptive(data.source, data.width, data.height).then(bytes => {
+          worker.postMessage({ type: 'adaptive-native-response', bytes }, [bytes.buffer]);
+        }).catch(error => {
+          worker.postMessage({ type: 'adaptive-native-response', error: error.message });
+        });
+        return;
+      }
       if (!running || data.id !== running.id) return;
       if (data.type === 'progress') { state.busy = data.label; updateStatus(); return; }
       if (data.type === 'error') { state.error = data.message; running.fail?.(data.message, data); }
@@ -184,7 +196,7 @@ function scaled(picture, k) {
 }
 
 async function writePNG(picture, suggestedName) {
-  const blob = await new Promise(done => toCanvas(picture).toBlob(done, 'image/png'));
+  const blob = await encodePNG(picture);
   if (desktop?.saveResultPNG) {
     const chooseLocation = state.chooseSaveLocation;
     const saved = await desktop.saveResultPNG(suggestedName, new Uint8Array(await blob.arrayBuffer()),
@@ -311,7 +323,7 @@ async function batch(files) {
       const data = await engine.request('open', { original, w: size[0], h: size[1], settings }, label);
       applyOpened(data, original, file.name);
       const picture = scaled(data.dotted, scale);
-      const blob = await new Promise(done => toCanvas(picture).toBlob(done, 'image/png'));
+      const blob = await encodePNG(picture);
       await desktop.writeToFolder(outputName(file.name, 'dot', data.dotted, scale), new Uint8Array(await blob.arrayBuffer()));
       saved++;
     } catch (error) {
@@ -363,7 +375,7 @@ function resize() {
 function redot() {
   if (!state.product || JSON.stringify(submittedSettings) === JSON.stringify(state.settings)) return;
   const settings = { ...state.settings };
-  const label = settings.aiLines && settings.method !== 'soft' && !submittedSettings?.aiLines ? '선 추출 AI가 원본의 선을 읽는 중' : '외곽선 정리 중';
+  const label = '도트화 설정 적용 중';
   submittedSettings = settings;
   engine.submit('redot', { settings }, label, data => {
     applyProduct(data);
@@ -456,7 +468,7 @@ async function copyResult() {
   const picture = result();
   if (!picture || state.busy) return;
   try {
-    const blob = await new Promise(done => toCanvas(scaled(picture, state.exportScale)).toBlob(done, 'image/png'));
+    const blob = await encodePNG(scaled(picture, state.exportScale));
     await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
     state.notice = `결과를 복사했습니다 (${picture.w * state.exportScale}×${picture.h * state.exportScale})`;
   } catch (error) {
@@ -472,9 +484,9 @@ async function loadAligned() {
   const { w, h } = state.product.dotted;
   try {
     const method = state.settings.method, product = state.product;
-    const { subject } = await engine.request('subject', { faithful: method === 'faithful' }, '비교할 원본 준비 중');
+    const { subject } = await engine.request('subject', {}, '비교할 원본 준비 중');
     if (state.product !== product || state.settings.method !== method) return;
-    const margin = method === 'soft' || method === 'berry' ? 0 : 4;
+    const margin = 4;
     const scale = Math.min((w - margin) / subject.w, (h - margin) / subject.h);
     const sw = Math.max(1, Math.round(subject.w * scale)), sh = Math.max(1, Math.round(subject.h * scale));
     const k = Math.max(1, Math.round(1200 / Math.max(w, h)));
@@ -707,7 +719,7 @@ const labelled = (text, control) => el('label', { className: 'field' }, el('span
 
 /** AI 업스케일(ESRGAN): 도트화 전에 원본을 4배로 키운다. 도트화·AI 보정 탭이 같은 설정을 쓴다. */
 function upscaleControl() {
-  const control = labelled('AI 업스케일', segmented([['auto', '자동'], ['strong', '6B'], ['light', 'v3'], ['off', '끄기']],
+  const control = labelled('AI 업스케일', segmented([['auto', '자동'], ['strong', '6B'], ['light', 'v3'], ['off', '안 함']],
     state.settings.upscale, v => setSetting('upscale', v), Boolean(state.operation), 'AI 업스케일'));
   control.title = '도트화하기 전에 원본을 AI(Real-ESRGAN)로 4배 키워 흐린 선과 잡티를 정리합니다. 자동은 원본이 결과 크기의 4배보다 작을 때만 켭니다. 6B는 더 깔끔하고, v3는 더 빠릅니다.';
   return control;
@@ -829,10 +841,14 @@ function controls(stage) {
   const sizeRow = row(sizeControl(), upscaleControl());
   if (stage === 'dot') {
     // 설정은 계산 중에도 바꿀 수 있다(마지막 설정으로 다시 계산).
-    const s = state.settings, off = !loaded, soft = s.method === 'soft';
-    const methods = segmented([['faithful', '원본 보존'], ['soft', '원본 색 살림'], ['berry', '베리 잉크'], ['basic', '2.0 방식'], ['direct', '원본 직행']], s.method, v => setSetting('method', v), off, '도트화 방식');
+    const s = state.settings, off = !loaded;
+    const methods = segmented(DOT_METHODS, s.method, v => setSetting('method', v), off, '도트화 방식');
+    const background = labelled('배경 분리', segmented([['auto', '자동'], ['ai', 'AI 분리'], ['keep', '배경 유지']], s.background,
+      v => setSetting('background', v), Boolean(state.operation), '배경 분리'));
+    const methodRow = row(methods, background,
+      tip('자동 분리에서 흰 몸통까지 지워지면 AI 분리를 시도하세요. 배경 유지는 원본 전체를 줄입니다.'));
     if (s.method === 'faithful') {
-      return el('div', { className: 'stack' }, sizeRow, row(methods),
+      return el('div', { className: 'stack' }, sizeRow, methodRow,
         row(toggle('또렷하게(작은 크기용)', s.sharpCells, v => setSetting('sharpCells', v), off,
           '칸 색을 평균 내지 않고 선 색이나 면 색 하나로 고릅니다. 작은 결과 크기에서 눈·입·무늬가 회색으로 뭉개지는 것을 줄입니다. 큰 크기에서는 선이 거칠어질 수 있습니다.'),
         toggle('바깥 외곽선 1픽셀(원본 선 색)', s.crispOutline, v => setSetting('crispOutline', v), off,
@@ -845,30 +861,7 @@ function controls(stage) {
           '눈 두 개 사이 아래의 작은 입 선(ω 등)이 회색으로 뭉개지지 않게 원본 선 색으로 살립니다.')),
         finishRow(off), jevControls());
     }
-    // 원본 색 살림은 원본 선을 그대로 살리는 방식이라 외곽선·선 추출·경계색을 쓰지 않는다.
-    const colorStepper = soft
-      ? stepper(`최대 ${s.softColors}색`, s.softColors, 4, 64, 2, v => setSetting('softColors', v), off)
-      : stepper(`최대 ${s.colors}색`, s.colors, 6, 32, 1, v => setSetting('colors', v), off);
-    return el('div', { className: 'stack' }, sizeRow,
-      row(methods),
-      soft && row(toggle('선 1픽셀로 정리', s.softLines, v => setSetting('softLines', v), off,
-        '큰 원본에서 선의 가운데 줄기를 찾아 그 줄기가 지나는 칸만 선으로 칠합니다. 선이 끊기거나 뭉치지 않고 입(ω) 같은 작은 모양이 살아납니다. 원본이 굵은 선 그림이면 꺼 보세요.'),
-        toggle('선명하게', s.softVivid, v => setSetting('softVivid', v), off,
-          '분홍·보라 같은 색의 채도를 25% 올려 또렷하게 합니다. 흰색·검정·회색은 그대로입니다.'),
-        toggle('테두리·색 면 정리', s.softClean, v => setSetting('softClean', v), off,
-          '바깥 테두리를 끊김 없는 순검정 1px로 잇고, 거의 같은 색을 합치고 혼자 떨어진 점을 지웁니다.'),
-        toggle('강조색 지키기', s.keepAccents, v => setSetting('keepAccents', v), off,
-          '면적이 작아 색 줄이기에서 빠진 또렷한 색(눈 하이라이트·작은 장식)을 최대 3색까지 더 남깁니다.')),
-      row(colorStepper,
-        labelled('색 정리', segmented([[0, '끄기'], [1, '보통'], [2, '강하게']], s.cleanup, v => setSetting('cleanup', v), off || (s.method !== 'basic' && s.method !== 'direct'), '색 정리'))),
-      row(labelled('검은 외곽선', segmented([[1, '1줄'], [2, '2줄']], s.width, v => setSetting('width', v), off || soft, '검은 외곽선'))),
-      row(toggle('선 추출 AI로 빠진 선 채우기', s.aiLines, v => setSetting('aiLines', v), off || soft,
-        'MangaLineExtraction으로 원본의 구조선을 읽어, 도트에서 끊기거나 빠진 안쪽 선만 채웁니다. 처음 한 번 모델(약 82MB)을 받습니다.')),
-      row(toggle('몸통 경계색', s.boundary, v => setSetting('boundary', v), off || soft),
-        stepper(`투명도 ${s.transparency}%`, s.transparency, 0, 100, 5, v => setSetting('transparency', v), off || soft || !s.boundary)),
-      finishRow(off),
-      jevAutoControls(),
-    );
+    return el('div', { className: 'stack' }, sizeRow, methodRow, finishRow(off), jevAutoControls());
   }
   return null;
 }
@@ -1010,9 +1003,7 @@ function screen(stage) {
     compare.setAttribute('aria-pressed', String(Boolean(showing)));
     const after = showing ? preview('원본 (결과와 같은 자리)', state.aligned, false, compare) : preview('결과', result('dot'), true, compare);
     if (showing) after.querySelector('.size').textContent = `${result('dot').w} × ${result('dot').h} px 자리`;
-    page.append(state.settings.method === 'faithful'
-        ? el('div', { className: 'previews' }, preview('원본', state.original, false), after)
-        : el('div', { className: 'previews' }, preview('축소 이미지', result('reduce'), true), after));
+    page.append(el('div', { className: 'previews' }, preview('원본', state.original, false), after));
   } else {
     page.append(el('button', { type: 'button', className: 'empty drop', onclick: () => $('file').click() },
       el('strong', { textContent: '캐릭터 이미지를 여기에 놓으십시오' }), el('span', { textContent: 'PNG, JPEG, WebP 등 이미지 파일 · 눌러서 고를 수도 있어요' })));
@@ -1072,38 +1063,31 @@ function helpScreen() {
     ])),
     section('도트화 설정', list([
       '<b>캐릭터를 분리하지 못했을 때</b>: 오류 문구 옆의 <b>분리 없이 그대로 변환</b>을 누르면 배경을 지우지 않고 그림 전체를 그대로 도트로 바꿉니다.',
+      '<b>배경 분리</b>: 자동은 밝은 배경·투명 배경을 바로 처리하고, 필요할 때 AI를 사용합니다. 흰 몸통까지 지워진 그림은 <b>AI 분리</b>로 다시 시도할 수 있습니다.',
+      '<b>DPID</b> · <b>SSIM 축소</b> · <b>내용 적응형 축소</b> · <b>Magic Kernel Sharp</b>: 같은 캐릭터와 같은 배치에서 축소하는 방법을 바꿉니다. 비교표 조건으로 보려면 AI 업스케일을 <b>안 함</b>으로 고르세요.',
       '<b>또렷하게(작은 크기용)</b>(원본 보존): 칸 색을 평균 내지 않고 선 색이나 면 색 하나로 골라, 50×50처럼 작은 크기에서 눈·입·무늬가 뭉개지는 것을 줄입니다.',
       '<b>가장자리 반투명 없애기 · 외톨이 점 정리 · 팔레트 고정</b>: 모든 방식에 마지막으로 적용합니다. 팔레트 고정은 정해 둔 색만 쓰게 해 여러 그림의 색감을 맞춥니다(직접 입력은 16진수 색을 쉼표로).',
-      '<b>강조색 지키기</b>(원본 색 살림): 색 줄이기에서 빠진 작은 강조색을 최대 3색 더 남깁니다.',
       '<b>AI 업스케일(ESRGAN)</b>: 도트화하기 전에 원본을 Real-ESRGAN으로 4배 키워 흐린 선과 잡티를 정리합니다. 자동은 원본이 결과 크기의 4배보다 작을 때만 켭니다. 6B는 더 깔끔하고, v3는 더 빠릅니다.',
       '<b>원본 보존</b>(기본): 원본 픽셀이 결과 격자 한 칸에 걸치는 넓이만큼 그대로 평균 내서, 선 굵기와 명암을 살린 투명 PNG를 만듭니다. 투명 배경 그림은 떨어진 장식까지 그대로 둡니다.',
       '<b>바깥 외곽선 1픽셀(원본 선 색)</b>(원본 보존): 투명 배경 바로 앞 가장 바깥 칸만, 원본 그 자리에 선이 있으면 원본 선 색으로 칠하고 그 바깥의 흐린 칸을 지웁니다. 흰 외곽선 장식과 발밑 그림자는 그대로 둡니다.',
       '<b>원본 색 맞추기</b>(원본 보존): 줄이면서 생긴 탁한 중간색 대신, 그 칸 원본에 실제로 있는 가장 가까운 색을 넣습니다.',
       '<b>경계 섞인 색 정리</b>(원본 보존): 줄이면서 경계에 생긴 탁한 중간색(빨강+검정 → 자주 등)을 가까운 원래 색으로 바꿉니다. 부드러운 명암은 건드리지 않습니다.',
       '<b>작은 입선 보존</b>(원본 보존): 눈 두 개 사이 아래의 작은 입 선(ω 등)이 회색으로 뭉개지지 않게 원본 선 색으로 살립니다.',
-      '<b>원본 색 살림</b>: 원본의 선과 색을 살리고 색 수만 줄입니다(최대 4~64색, 기본 24색). 외곽선을 따로 씌우지 않습니다.',
-      '<b>선 1픽셀로 정리</b>(원본 색 살림, 기본 켬): 큰 원본에서 선의 가운데 줄기를 찾아 1픽셀 선으로 그립니다. 선이 끊기거나 뭉치지 않고 입(ω) 같은 작은 모양이 살아납니다. 원본이 굵은 선 그림이면 끄는 편이 원래 느낌에 가깝습니다.',
-      '<b>선명하게</b>(원본 색 살림, 기본 켬): 분홍·보라 같은 색의 채도를 25% 올립니다. 흰색·검정·회색은 그대로입니다. 끄면 원본 색 그대로입니다.',
-      '<b>테두리·색 면 정리</b>(원본 색 살림, 기본 켬): 바깥 테두리를 끊김 없는 순검정 1px로 잇고(가시·홈·겹선 정리), 거의 같은 색을 합치고 혼자 떨어진 점을 지웁니다. 끄면 원본 테두리 그대로입니다.',
-      '<b>베리 잉크</b>: 진한 잉크 윤곽과 베리 색감. <b>2.0 방식</b>: 머리·몸통을 구분하는 방식. <b>원본 직행</b>: 2.0 방식과 같은 그리기를 원본에서 바로 격자를 읽어 합니다(색 정리는 2.0 방식·원본 직행에서만).',
-      '<b>최대 색</b>: 결과에 쓸 색 수(베리 잉크·2.0은 6~32). <b>검은 외곽선</b>: 바깥 테두리 1줄·2줄(베리 잉크·2.0).',
-      '<b>선 추출 AI로 빠진 선 채우기</b>: 원본의 선을 AI로 읽어 끊긴 안쪽 선을 채웁니다. 160px 이상으로 크게 만들 때 효과가 큽니다.',
-      '<b>몸통 경계색</b>: 검은 테두리 바로 안쪽 흰 몸통에 중간색을 넣습니다. 투명도가 클수록 흰색에 가깝습니다.',
     ])),
     section('JEV 판정', list([
       '<b>JEV 설정</b>에 LLM Gateway API 키를 넣습니다. 키는 이 컴퓨터의 암호화 저장소에 보관됩니다.',
       '<b>JEV 부위별 진단</b>: 바깥 윤곽·안쪽 선(1픽셀/2픽셀), 머리색, 투명 테두리 띠, 바깥 외곽선, 빠진 디테일(눈·입·장식·명암)을 원본과 비교합니다.',
       '<b>JEV 섞인 색 판정</b>: 섞인 색이 몰린 4곳을 골라 그대로·가까운 색·선 색 쪽 중 무엇이 나은지 봅니다.',
       '<b>JEV 선·색 비교</b>(원본 보존): 선 처리 후보를 먼저 고르고, 그 선으로 채색 후보(원본 채색·16색·32색)를 고릅니다.',
-      '<b>JEV 자동 선택</b>(그 밖의 방식): 베리 잉크·2.0 방식 후보를 나란히 보여 주고 가장 나은 설정을 고릅니다.',
+      '<b>JEV 자동 선택</b>(그 밖의 방식): 다섯 가지 도트화 결과를 나란히 비교해 가장 나은 방식을 고릅니다.',
       'JEV가 확실하게 고른 후보는 미리 선택돼 있고, 항목마다 버튼으로 <b>직접 바꿀 수 있습니다</b>. <b>선택 적용</b>으로 그림에 반영하고, <b>적용 전으로</b>로 되돌립니다.',
       '판정할 때 배경을 분리한 원본과 후보 그림이 LLM Gateway로 전송되며, 요금은 내 키 계정에 청구됩니다. 한 번에 10~20초쯤 걸립니다.',
     ])),
     section('AI 파일',
-      el('p', { innerHTML: 'AI 기능(AI 업스케일·배경 분리·선 추출)은 처음 쓸 때 아래 파일을 <b>자동으로 받아 이 프로그램의 저장소에 보관</b>합니다(받다 끊기면 이어받음). 그다음부터는 인터넷 없이 됩니다.' }),
+      el('p', { innerHTML: 'AI 기능(AI 업스케일·배경 분리·부위 선택)은 처음 쓸 때 아래 파일을 <b>자동으로 받아 이 프로그램의 저장소에 보관</b>합니다(받다 끊기면 이어받음). 그다음부터는 인터넷 없이 됩니다.' }),
       el('p', { innerHTML: '<b>넣을 경로는 따로 없습니다.</b> 파일은 폴더가 아니라 프로그램 저장소(IndexedDB, 이름 <code>dotmaker-ai</code>)에 들어갑니다. 아래 <b>저장된 AI 파일 지우기</b>로 지울 수 있습니다.' }),
       el('p', { innerHTML: '<b>직접 받아 넣기</b>(인터넷이 막힌 PC 등): 아래 <b>받는 주소</b>에서 파일을 받아(열리면 오른쪽 클릭 → \'다른 이름으로 링크 저장\') 어느 폴더에 두든 상관없이, <b>AI 파일 불러오기…</b>로 한꺼번에 고르면 됩니다. 파일은 크기로 알아보니 이름이 바뀌어도 괜찮지만, 내용은 그대로여야 합니다(넣을 때 sha256으로 원본과 같은지 확인합니다).' }),
-      el('p', { className: 'muted', textContent: '필요한 파일: 배경 분리 = 실행 도구 3개 + isnetis.onnx · 선 추출 = 실행 도구 3개 + model.safetensors' }),
+      el('p', { className: 'muted', textContent: '필요한 파일: 배경 분리 = 실행 도구 3개 + isnetis.onnx · AI 부위 선택 = 실행 도구 3개 + MobileSAM 모델 2개' }),
       el('div', { className: 'table-wrap' }, table),
       actions,
       state.aiMessage && el('p', { className: 'note', textContent: state.aiMessage })),
@@ -1126,7 +1110,7 @@ function helpScreen() {
     section('맥·윈도우·리눅스', list([
       '맥용·윈도우용·리눅스용(.deb·.AppImage)은 같은 코드로 만들어 기능과 결과가 같습니다.',
     ])),
-    el('p', { className: 'muted', textContent: `도트메이커 ${VERSION} · 모델: skytnt/anime-seg (Apache-2.0), p1atdev/MangaLineExtraction-hf (MIT), Real-ESRGAN (BSD-3-Clause) · 실행 도구: onnxruntime-web (MIT) · 프로그램 본체: Electron (MIT)` }),
+    el('p', { className: 'muted', textContent: `도트메이커 ${VERSION} · 모델: skytnt/anime-seg (Apache-2.0), Real-ESRGAN (BSD-3-Clause) · 실행 도구: onnxruntime-web (MIT) · 프로그램 본체: Electron (MIT)` }),
   );
 }
 

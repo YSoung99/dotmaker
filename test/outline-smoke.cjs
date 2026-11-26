@@ -5,6 +5,7 @@ const { tmpdir } = require('node:os');
 const path = require('node:path');
 const { app, BrowserWindow, session } = require('electron');
 const { expression, expected } = require('./outline-scenario.cjs');
+const { dotResizeExpression, dotResizeExpected } = require('./dot-resize-scenario.cjs');
 const { lab2Expression, lab2Expected } = require('./lab2-scenario.cjs');
 
 app.setPath('userData', mkdtempSync(path.join(tmpdir(), 'dotmaker-outline-smoke-')));
@@ -17,6 +18,9 @@ app.whenReady().then(async () => {
   const checks = await window.webContents.executeJavaScript(expression);
   assert.deepEqual(checks, expected);
   console.log('검정 테두리 겹침 Electron 검증 통과', checks);
+  const dotResize = await window.webContents.executeJavaScript(dotResizeExpression);
+  assert.deepEqual(dotResize, dotResizeExpected);
+  console.log('도트 축소 방식 Electron 검증 통과', dotResize);
   const lab2 = await window.webContents.executeJavaScript(lab2Expression);
   assert.deepEqual(lab2, lab2Expected);
   console.log('실험실 2 Electron 검증 통과', lab2);
