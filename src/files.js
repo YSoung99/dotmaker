@@ -2,7 +2,10 @@
 // 처음 쓸 때 한 번 인터넷에서 받거나, 사용자가 직접 받은 파일을 'AI 파일 불러오기'로 넣으면 여기에 저장된다.
 // sha256은 각 주소에서 실제로 받은 파일로 계산한 값이다(2026-11-18). 받기·넣기 모두 크기와 함께 내용도 맞춰 본다.
 const ORT_BASE = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
+const SAM_BASE = 'https://huggingface.co/Acly/MobileSAM/resolve/0d3b403339b4674a82493d5e97964dd78089ddc8/';
 const AI_FILES = {
+  samEncoder: { name: 'mobile_sam_image_encoder.onnx', size: 28157093, sha256: '580f5fb648ea1062c0aabc26217aed56921985f03f0cbbd852bba81d760cc749', url: SAM_BASE + 'mobile_sam_image_encoder.onnx', title: 'MobileSAM 이미지 모델 (Apache-2.0)', use: '실험실 2 · AI로 부위 선택' },
+  samDecoder: { name: 'sam_mask_decoder_single.onnx', size: 16501323, sha256: '93915fc7c993ab9d59ab8c9ccd3bce37f7509c81ab4150a74abd4d2abbd8570d', url: SAM_BASE + 'sam_mask_decoder_single.onnx', title: 'MobileSAM 클릭 모델 (Apache-2.0)', use: '실험실 2 · AI로 부위 선택' },
   ortJs: { name: 'ort.webgpu.min.js', size: 66417, sha256: '7d65dad7eb4564ad98db9924a259af2e2c68ebfbdbf254fa5d728f1c5736e07a', url: ORT_BASE + 'ort.webgpu.min.js', title: 'AI 실행 도구 (onnxruntime-web 1.30.0)', use: '배경 분리·선 추출·AI 업스케일 공통' },
   ortMjs: { name: 'ort-wasm-simd-threaded.asyncify.mjs', size: 53057, sha256: '3d1c85995364bb643302fc6fd877a0c3ba5ae72401815e0f24828a53d9191e28', url: ORT_BASE + 'ort-wasm-simd-threaded.asyncify.mjs', title: 'AI 실행 도구 연결 파일', use: '배경 분리·선 추출·AI 업스케일 공통' },
   ortWasm: { name: 'ort-wasm-simd-threaded.asyncify.wasm', size: 26781914, sha256: '39f9f0894d478800487ed9f7dbe92618498db320cf55c8e3d89adff8dce658da', url: ORT_BASE + 'ort-wasm-simd-threaded.asyncify.wasm', title: 'AI 실행 엔진', use: '배경 분리·선 추출·AI 업스케일 공통' },

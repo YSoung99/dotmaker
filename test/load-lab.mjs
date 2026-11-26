@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 
 export function loadLab() {
   const context = vm.createContext({});
-  const code = ['lab-core.js', 'maple.js'].map(name => readFileSync(new URL(`../src/${name}`, import.meta.url), 'utf8')).join('\n');
-  vm.runInContext(`${code}\nthis.lab = { labShrink, labVote, labRepairOutline, labAutoPalette, labNearest, labCompute, mapleBuild, mapleDecode, mapleEncode };`, context);
+  const code = ['lab-core.js', 'lab2-core.js', 'maple.js'].map(name => readFileSync(new URL(`../src/${name}`, import.meta.url), 'utf8')).join('\n');
+  vm.runInContext(`${code}\nthis.lab = { labShrink, labVote, labRepairOutline, labAutoPalette, labNearest, labCompute, lab2Compute, lab2Region, lab2Flatten, mapleBuild, mapleDecode, mapleEncode };`, context);
   return context.lab;
 }

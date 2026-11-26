@@ -56,7 +56,7 @@ chmod +x DotMaker-*-linux-x86_64.AppImage
 - **프로그램 안에서 업데이트**(윈도우·맥·리눅스 AppImage·deb): 켤 때마다 새 버전이 있는지 확인해, 있으면 지금 업데이트할지 묻습니다. '지금 업데이트'를 고르면 뒤에서 받아 바로 설치한 뒤 다시 켜지고, 새 버전이 없으면 아무것도 묻지 않습니다. 위쪽 **업데이트 확인** 버튼으로 언제든 직접 확인할 수 있습니다. deb판은 설치할 때 컴퓨터 암호를 한 번 묻습니다. 업데이트가 안 되면 릴리스 페이지로 바로 갈 수 있습니다.
 - **품질 옵션**: **또렷하게(작은 크기용)** 는 칸 색을 평균 내지 않고 선·면 색 하나로 골라 작은 크기에서 뭉개짐을 줄입니다. 가장자리 반투명 없애기 · 강조색 지키기 · 팔레트 고정 · 외톨이 점 정리도 고를 수 있습니다.
 - **실험 탭(베타)**: 도트 크기와 색 수만 골라 그림을 도트로 바꿉니다. **배경 지우기**를 끄면 배경 있는 일러스트 전체를 배경째 바꾸고, 줄이는 방식(평균·투표)을 고를 수 있으며, 자동 추출(원본 색감 유지)과 커스텀 팔레트(정한 색만)를 고를 수 있습니다.
-- **실험실 2**: PAX로 긴 변과 색 수를 정해 그림을 도트로 바꿀 수 있습니다. Xprite는 확대되거나 흐려진 도트에서 원래 격자를 추정합니다. 원본과 미리보기를 비교한 뒤 PNG로 저장할 수 있습니다.
+- **실험실 2**: 원본에서 눈·입·장식을 드래그해 중요한 색과 선을 보호하거나, 색면의 잔색을 먼저 정리해 도트로 줄입니다. **AI로 부위 선택**을 쓰면 클릭한 부위만 보호하거나 정리합니다. MobileSAM은 첫 사용 때 모델 약 45MB를 받고 이미지는 기기에서 처리합니다.
 - **결과 보기**: 미리보기를 맞춤·1×~8×로 키워 보고, 격자로 도트 칸을 확인하고, 배경을 체커·흰색·검정으로 바꿀 수 있습니다.
 - **편의 기능**: 마지막 설정 기억, 캡처한 그림 붙여넣기(Ctrl/⌘+V), 결과 복사(Ctrl/⌘+C), 여러 장을 한꺼번에 도트화해 폴더에 저장, 결과 자리에서 **원본 보기**로 비교.
 - AI 업스케일이 어떤 이유로 실패하면 그림은 업스케일 없이 도트화하고, 상태줄에 'AI 업스케일 건너뜀'으로 알려 줍니다.
@@ -73,7 +73,7 @@ chmod +x DotMaker-*-linux-x86_64.AppImage
 | 프로그램 버전 | [`package.json`](package.json)의 `"version"` (화면과 설치 파일 이름에 자동 반영) |
 | 화면(버튼·문구·설명서) | `src/app.js`, `src/app.html` |
 | 실험 탭(베타) | 화면 `src/lab.js`, 계산 `src/lab-core.js`, 메이플 램프 `src/maple.js` |
-| 실험실 2 | 화면 `src/lab2.js`, 변환·복원 작업자 `src/lab2-worker.js` |
+| 실험실 2 | 화면 `src/lab2.js`, 계산 `src/lab2-core.js`, 클릭 선택 `src/mobile-sam.js` |
 | 도트화 계산 | `src/core.js` |
 | AI(업스케일·배경 분리·선 추출) | `src/ai.js`, `src/worker.js` |
 | AI 보정(클라우드)·JEV | `src/cloud.js`, `src/jev-app.js`, `src/jev-core.js` |
@@ -115,6 +115,7 @@ AI 업스케일 모델(ONNX)은 [models-esrgan 릴리스](https://github.com/YSo
 
 ## 📝 업데이트 기록
 
+- **3.12.1**: **실험실 2**에 중요 영역 보호·색면 정리·AI 부위 선택을 추가하고 PAX와 Xprite를 제거했습니다. 원본에서 눈·입·장식을 표시해 작은 도트에서도 색과 선을 살리고, MobileSAM으로 클릭한 부위만 보호하거나 색면을 정리할 수 있습니다.
 - **3.12.0**: **실험실 2**를 추가했습니다. PAX는 지정한 크기와 색 수에 맞춰 그림을 도트로 바꾸고 반투명을 유지합니다. Xprite는 확대되거나 흐려진 도트의 격자를 복원해 원본과 비교할 수 있습니다.
 - **3.11.4**: 윈도우판에 **저장 위치 지정**을 추가했습니다. 켜면 PNG를 저장할 폴더와 파일명을 고를 수 있고, 다음 저장 창은 마지막으로 저장한 폴더에서 열립니다. 끄면 내 문서에 바로 저장합니다.
 - **3.11.3**: **검정 테두리 겹침**을 추가했습니다. 미리보기에서 겹침을 조절하면 저장하는 PNG에도 반영됩니다. 도트화 탭에서 0%는 원본, 1%는 10장, 50%는 500장입니다. 바깥 반투명 검정 계열만 진해지고, **가장자리 반투명 없애기**를 끈 상태에서 조절할 수 있습니다.
@@ -146,6 +147,7 @@ AI 업스케일 모델(ONNX)은 [models-esrgan 릴리스](https://github.com/YSo
 - AI 업스케일: [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) RealESRGAN_x4plus_anime_6B · realesr-animevideov3 (BSD-3-Clause) — ONNX로 바꿔 [models-esrgan 릴리스](https://github.com/YSoung99/dotmaker/releases/tag/models-esrgan)에 올린 것
 - 배경 분리: [skytnt/anime-seg](https://huggingface.co/skytnt/anime-seg) (Apache-2.0)
 - 선 추출: [p1atdev/MangaLineExtraction-hf](https://huggingface.co/p1atdev/MangaLineExtraction-hf) (MIT) — `src/lines-graph.onnx`는 이 모델의 구조를 ONNX로 옮긴 것
+- 클릭 선택: [MobileSAM](https://github.com/ChaoningZhang/MobileSAM) (Apache-2.0), [Acly ONNX 변환본](https://huggingface.co/Acly/MobileSAM)
 - 실행 도구: [onnxruntime-web](https://github.com/microsoft/onnxruntime) (MIT) · 프로그램 본체: [Electron](https://www.electronjs.org/) (MIT)
 
 README의 예시 고양이 그림은 이 저장소용으로 새로 그린 것입니다.

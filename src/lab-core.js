@@ -36,10 +36,10 @@ function labShrink(source, wanted) {
  * protect: 칸보다 가는 선·작은 하이라이트는 투표에서 지므로, 둘레와 밝기가 뚜렷이 다르고
  *          옆 칸보다 그 색이 많이 지나가는(줄기) 칸이면 그 색을 고른다.
  */
-function labVote(source, wanted, protect) {
+function labVote(source, wanted, protect, region = null, preserveAlpha = false) {
   const scale = Math.max(wanted, Math.max(source.w, source.h) / LAB_MAX_SIDE);
   const w = Math.max(1, Math.round(source.w / scale)), h = Math.max(1, Math.round(source.h / scale));
-  const src = source.bytes, palette = labAutoPalette(source, LAB_VOTE_COLORS), K = palette.length;
+  const src = source.bytes, palette = labAutoPalette(source, LAB_VOTE_COLORS, region), K = palette.length;
   const luma = palette.map(c => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]);
   const nearest = new Int16Array(32768).fill(-1);
   const labelAt = i => {
@@ -59,10 +59,19 @@ function labVote(source, wanted, protect) {
   };
   // 칸마다 라벨별 넓이(area)와 표(votes). 절반 넘게 투명한 칸은 투명(-1).
   const area = new Float32Array(w * h * K), votes = new Float32Array(w * h * K), filled = new Float32Array(w * h), chosen = new Int16Array(w * h).fill(-1);
+  const marked = region && new Uint8Array(w * h);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const c = y * w + x, base = c * K;
-    each(x, y, (i, alpha, centre) => { const l = labelAt(i); area[base + l] += alpha; votes[base + l] += alpha * centre; filled[c] += alpha; });
-    if (filled[c] < (ys[y][1] - ys[y][0]) * (xs[x][1] - xs[x][0]) * 0.5) continue;
+    each(x, y, (i, alpha, centre) => {
+      const l = labelAt(i);
+      area[base + l] += alpha;
+      const important = region?.[i / 4];
+      if (important) marked[c] = 1;
+      votes[base + l] += alpha * centre * (important ? 8 : 1);
+      filled[c] += alpha;
+    });
+    const pixels = (ys[y][1] - ys[y][0]) * (xs[x][1] - xs[x][0]);
+    if (filled[c] === 0 || (!preserveAlpha && filled[c] < pixels * 0.5)) continue;
     let best = 0;
     for (let l = 1; l < K; l++) if (votes[base + l] > votes[base + best]) best = l;
     chosen[c] = best;
@@ -72,7 +81,7 @@ function labVote(source, wanted, protect) {
     const picked = chosen.slice();
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       const c = y * w + x;
-      if (picked[c] < 0) continue;
+      if (picked[c] < 0 || marked?.[c]) continue;
       // 둘레(3×3칸)에서 가장 넓은 색이 이 자리의 바탕색
       let ground = 0, most = -1;
       for (let l = 0; l < K; l++) {
@@ -110,8 +119,13 @@ function labVote(source, wanted, protect) {
     const c = y * w + x;
     if (chosen[c] < 0) continue;
     let r = 0, g = 0, b = 0, n = 0;
-    each(x, y, (i, alpha, centre) => { if (labelAt(i) === chosen[c]) { const t = alpha * centre; r += src[i] * t; g += src[i + 1] * t; b += src[i + 2] * t; n += t; } });
-    out[c * 4] = Math.round(r / n); out[c * 4 + 1] = Math.round(g / n); out[c * 4 + 2] = Math.round(b / n); out[c * 4 + 3] = 255;
+    each(x, y, (i, alpha, centre) => {
+      if (labelAt(i) !== chosen[c]) return;
+      const t = alpha * centre * (region?.[i / 4] ? 8 : 1);
+      r += src[i] * t; g += src[i + 1] * t; b += src[i + 2] * t; n += t;
+    });
+    out[c * 4] = Math.round(r / n); out[c * 4 + 1] = Math.round(g / n); out[c * 4 + 2] = Math.round(b / n);
+    out[c * 4 + 3] = preserveAlpha ? Math.round(255 * filled[c] / ((xs[x][1] - xs[x][0]) * (ys[y][1] - ys[y][0]))) : 255;
   }
   return { w, h, bytes: out, scale, kept };
 }
@@ -163,14 +177,15 @@ function labRepairOutline(picture) {
 }
 
 /** 자동 추출: 그림에 쓰인 색을 가장 잘 대표하는 count색을 고른다(분산이 큰 쪽부터 나눈 뒤 몇 번 다듬기). */
-function labAutoPalette(picture, count) {
+function labAutoPalette(picture, count, importance = null) {
   const bins = new Map(), px = picture.bytes;
   for (let i = 0; i < px.length; i += 4) {
     if (px[i + 3] === 0) continue;
     const key = ((px[i] >> 3) << 10) | ((px[i + 1] >> 3) << 5) | (px[i + 2] >> 3);
     let bin = bins.get(key);
     if (!bin) bins.set(key, bin = [0, 0, 0, 0]);
-    bin[0] += px[i]; bin[1] += px[i + 1]; bin[2] += px[i + 2]; bin[3]++;
+    const weight = importance?.[i / 4] ? 8 : 1;
+    bin[0] += px[i] * weight; bin[1] += px[i + 1] * weight; bin[2] += px[i + 2] * weight; bin[3] += weight;
   }
   const points = [...bins.values()].map(([r, g, b, n]) => [r / n, g / n, b / n, n]);
   if (points.length <= count) return points.map(p => [Math.round(p[0]), Math.round(p[1]), Math.round(p[2])]);
@@ -231,6 +246,11 @@ function labCompute(source, options) {
   const small = voting ? labVote(source, options.wanted, options.protect) : labShrink(source, options.wanted);
   const mended = voting && options.repair ? labRepairOutline(small) : 0;
   const palette = options.palette?.length ? options.palette : labAutoPalette(small, options.count);
+  const used = labQuantize(small, palette);
+  return { w: small.w, h: small.h, bytes: small.bytes, scale: small.scale, kept: small.kept ?? 0, mended, used };
+}
+
+function labQuantize(small, palette) {
   const px = small.bytes, cache = new Map(), used = new Set();
   for (let i = 0; i < px.length; i += 4) {
     if (px[i + 3] === 0) continue;
@@ -240,7 +260,7 @@ function labCompute(source, options) {
     px[i] = palette[k][0]; px[i + 1] = palette[k][1]; px[i + 2] = palette[k][2];
     used.add(k);
   }
-  return { w: small.w, h: small.h, bytes: px, scale: small.scale, kept: small.kept ?? 0, mended, used: used.size };
+  return used.size;
 }
 
 /** 메이플 램프: 평균 방식과 같은 칸 수로 maple.js에 맡긴다(팔레트는 쓰지 않음). */

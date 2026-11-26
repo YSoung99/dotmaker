@@ -97,6 +97,7 @@ main { flex: 1; display: flex; min-height: 0; background: var(--panel); }
 .note { margin: 0; color: var(--muted); font-size: 12.5px; }
 .lab2 { overflow-y: auto; }
 .lab2 input[type=number] { width: 78px; }
+.lab2 canvas.select-region { cursor: crosshair; touch-action: none; }
 .toggle { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
 .toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
 
@@ -223,9 +224,6 @@ input.wide { width: min(520px, 100%); text-align: left; }
 <script type="text/plain" id="worker-src">
 /*AI*/
 /*WORKER*/
-</script>
-<script type="text/plain" id="lab2-worker-src">
-/*LAB2-WORKER*/
 </script>
 <script type="module" data-app>
 /*SHARED-START*/
