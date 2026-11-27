@@ -15,8 +15,8 @@ async function lab2Run() {
   const { mode, input, rectangles, mask, localEffect } = lab;
   const effect = mode === 'ai' ? localEffect : mode;
   const integerIn = (value, min, max) => /^\d+$/.test(value) && +value >= min && +value <= max;
-  if (!integerIn(lab.size, 16, 512) || !integerIn(lab.colors, 2, 64)) {
-    state.error = '긴 변은 16~512px, 색 수는 2~64로 입력해 주세요.';
+  if (!integerIn(lab.size, 16, 250) || !integerIn(lab.colors, 2, 64)) {
+    state.error = '긴 변은 16~250px, 색 수는 2~64로 입력해 주세요.';
     update();
     return;
   }
@@ -94,7 +94,7 @@ function lab2Controls() {
     ai: '원본에서 머리카락이나 후드 안쪽을 클릭하세요. 첫 사용 시 MobileSAM 모델 약 45MB와 공통 AI 실행 파일을 받습니다.',
   };
   return el('div', { className: 'stack' }, row(modes), effects && row(effects),
-    row(input('size', '긴 변(px)', 16, 512), input('colors', '색 수', 2, 64),
+    row(input('size', '긴 변(px)', 16, 250), input('colors', '색 수', 2, 64),
       (mode === 'flatten' || (mode === 'ai' && lab.localEffect === 'flatten')) && input('radius', '정리 반경(px)', 1, 12),
       run, clear, reuse),
     el('p', { className: 'note', textContent: hints[mode] }));

@@ -89,3 +89,10 @@ test('실험 탭에 빈 커스텀 팔레트가 들어오면 원본에서 색을 
     assert.deepEqual(Array.from(result.bytes), Array.from(bytes));
   }
 });
+
+test('실험 탭은 도트 크기대로 계산할 때도 한 변 최대 250칸을 넘지 않는다', () => {
+  const w = 300, h = 150, bytes = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < bytes.length; i += 4) bytes.set([250, 204, 21, 255], i);
+  const result = lab.labCompute({ w, h, bytes }, { method: 'average', wanted: 1, palette: null, count: 8 });
+  assert.deepEqual([result.w, result.h], [250, 125]);
+});

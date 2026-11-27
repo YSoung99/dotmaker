@@ -18,7 +18,7 @@ export const Errors = {
   render: '이미지를 처리할 수 없습니다.',
   subject: '캐릭터를 분리하지 못했습니다. 캐릭터 주위에 여백이 있는 원본이나 투명 PNG를 열어 주세요.',
   needsMask: 'AI 배경 분리가 필요한 이미지입니다.',
-  dimensions: '가로와 세로를 각각 16~512px로 입력해 주세요.',
+  dimensions: '가로와 세로를 각각 16~250px로 입력해 주세요.',
 };
 const fail = key => { throw new DotError(Errors[key], key); };
 
@@ -939,7 +939,7 @@ function overlaps(source, target, shift = 0) {
 }
 
 export function reduceDirect(subject, w, h, phase = [0, 0]) {
-  if (!(w >= 16 && w <= 512 && h >= 16 && h <= 512)) fail('dimensions');
+  if (!(w >= 16 && w <= 250 && h >= 16 && h <= 250)) fail('dimensions');
   const scale = Math.min((w - 4) / subject.grid.w, (h - 4) / subject.grid.h);
   const columns = overlaps(subject.grid.w, Math.max(1, Math.round(subject.grid.w * scale)), Math.round(phase[0] * subject.grid.w));
   const rows = overlaps(subject.grid.h, Math.max(1, Math.round(subject.grid.h * scale)), Math.round(phase[1] * subject.grid.h));

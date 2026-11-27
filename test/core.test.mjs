@@ -111,3 +111,12 @@ test('격자 위치 맞추기는 두 칸에 걸쳐 흐려진 선을 한 칸에 �
   assert.ok(darkest(plain) < 90);
   assert.equal(darkest(aligned), 100);
 });
+
+test('결과 크기는 최대 250×250까지 허용하고 251 이상은 거부한다', () => {
+  const subject = new core.Raster(20, 20);
+  subject.px.fill(core.pack(250, 204, 21));
+  const ok = core.reduceDirect(subject, 250, 250);
+  assert.deepEqual([ok.image.grid.w, ok.image.grid.h], [250, 250]);
+  assert.throws(() => core.reduceDirect(subject, 251, 250), { code: 'dimensions' });
+  assert.throws(() => core.reduceDirect(subject, 250, 251), { code: 'dimensions' });
+});

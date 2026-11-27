@@ -14,8 +14,8 @@ function registerAdaptive({ app, ipcMain }) {
     }
     const { w, h, bytes } = source ?? {};
     const dimension = (value, max) => Number.isInteger(value) && value >= 1 && value <= max;
-    if (!dimension(w, 2048) || !dimension(h, 2048) || !dimension(width, Math.min(w, 512)) ||
-      !dimension(height, Math.min(h, 512)) || !ArrayBuffer.isView(bytes) || bytes.BYTES_PER_ELEMENT !== 1 ||
+    if (!dimension(w, 2048) || !dimension(h, 2048) || !dimension(width, Math.min(w, 250)) ||
+      !dimension(height, Math.min(h, 250)) || !ArrayBuffer.isView(bytes) || bytes.BYTES_PER_ELEMENT !== 1 ||
       bytes.byteLength !== w * h * 4) {
       throw new Error('내용 적응형 축소의 입력 크기가 올바르지 않습니다.');
     }

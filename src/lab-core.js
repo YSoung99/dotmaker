@@ -1,6 +1,6 @@
 // 실험 탭(베타)의 순수 계산. 화면과 작업자가 함께 쓰고(SHARED), 실제 계산은 작업자가 한다.
 // 그림은 { w, h, bytes }(곧은 RGBA)이고, 화면·DOM·저장소는 쓰지 않는다.
-const LAB_MAX_SIDE = 512;
+const LAB_MAX_SIDE = 250;
 // 투표 방식: 칸이 어느 색 영역인지 정할 때만 쓰는 색 수, 그리고 '작은 디테일'로 볼 기준
 const LAB_VOTE_COLORS = 32;
 const LAB_DETAIL = { contrast: 56, share: 0.15 };   // 둘레 색과의 밝기 차(0~255), 칸에서 차지하는 최소 넓이 비율
