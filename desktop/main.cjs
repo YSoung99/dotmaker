@@ -8,36 +8,61 @@ const { registerAdaptive } = require('./adaptive.cjs');
 
 registerAdaptive({ app, ipcMain });
 
+// 요청은 도트메이커 창 본문(file://)에서 온 것만 받는다(adaptive.cjs와 같은 확인). 다른 곳에서 오면 거절한다.
+const trusted = event => event.senderFrame === event.sender.mainFrame && Boolean(event.senderFrame?.url.startsWith('file:'));
+const guard = handler => (event, ...args) => {
+  if (!trusted(event)) throw new Error('도트메이커 창에서만 쓸 수 있습니다.');
+  return handler(event, ...args);
+};
+const handle = (channel, handler) => ipcMain.handle(channel, guard(handler));
+
 const keyFile = (name = 'jev') => path.join(app.getPath('userData'), `${name}-key.bin`);
 
+// 키 파일이 없으면(아직 저장 안 함) 조용히 null, 있는데 못 풀면(다른 컴퓨터에서 옮겨 옴·저장소 바뀜) 기록을 남기고 null.
 function readKey(name = 'jev') {
+  let data;
   try {
-    const data = fs.readFileSync(keyFile(name));
-    return safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(data) : null;
-  } catch {
+    data = fs.readFileSync(keyFile(name));
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.error(`${name} 키 파일을 읽지 못했습니다:`, error.message);
+    return null;
+  }
+  if (!safeStorage.isEncryptionAvailable()) return null;
+  try {
+    return safeStorage.decryptString(data);
+  } catch (error) {
+    console.error(`${name} 키를 풀지 못했습니다(다시 저장해 주세요):`, error.message);
     return null;
   }
 }
 
 function writeKey(name, key) {
   if (!safeStorage.isEncryptionAvailable()) throw new Error('이 컴퓨터에서 암호화 저장소를 쓸 수 없습니다.');
+  // 리눅스에서 키링이 없으면 'basic_text'(사실상 암호화 안 됨)로 떨어진다. 막지는 않고 기록만 남긴다.
+  if (safeStorage.getSelectedStorageBackend?.() === 'basic_text') console.warn('암호화 키링이 없어 키를 약한 방식(basic_text)으로 저장합니다.');
   fs.mkdirSync(path.dirname(keyFile(name)), { recursive: true });
   fs.writeFileSync(keyFile(name), safeStorage.encryptString(String(key).trim()));
 }
 
-ipcMain.handle('jev:hasKey', () => Boolean(readKey()));
-ipcMain.handle('jev:setKey', (_event, key) => { writeKey('jev', key); return true; });
-ipcMain.handle('jev:clearKey', () => { fs.rmSync(keyFile(), { force: true }); return true; });
-ipcMain.handle('jev:request', async (_event, body) => {
+handle('jev:hasKey', () => Boolean(readKey()));
+handle('jev:setKey', (_event, key) => { writeKey('jev', key); return true; });
+handle('jev:clearKey', () => { fs.rmSync(keyFile(), { force: true }); return true; });
+handle('jev:request', async (_event, body) => {
   const key = readKey();
   if (!key) return { status: 401, text: 'JEV 설정에서 LLM Gateway API 키를 저장해 주세요.' };
-  const response = await fetch('https://api.llmgateway.io/v1/decisions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(90_000),
-  });
-  return { status: response.status, text: await response.text() };
+  // 인터넷 끊김·시간 초과는 status 0으로 돌려준다(화면이 읽기 쉬운 오류로 보여 준다).
+  try {
+    const response = await fetch('https://api.llmgateway.io/v1/decisions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(90_000),
+    });
+    return { status: response.status, text: await response.text() };
+  } catch (error) {
+    const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+    return { status: 0, text: timedOut ? 'LLM Gateway 응답이 90초 안에 오지 않았습니다.' : `LLM Gateway에 연결하지 못했습니다: ${error?.message ?? error}` };
+  }
 });
 
 // 클라우드 AI(PixelLab·Gemini·OpenAI) 키: 요청은 화면이 직접 보내므로, 보낼 때 화면이 키를 꺼내 간다.
@@ -45,13 +70,13 @@ const cloudName = id => {
   if (!['pixellab', 'gemini', 'openai'].includes(id)) throw new Error('알 수 없는 클라우드 서비스입니다.');
   return 'cloud-' + id;
 };
-ipcMain.handle('cloud:getKey', (_event, id) => readKey(cloudName(id)) ?? '');
-ipcMain.handle('cloud:setKey', (_event, id, key) => { writeKey(cloudName(id), key); return true; });
-ipcMain.handle('cloud:clearKey', (_event, id) => { fs.rmSync(keyFile(cloudName(id)), { force: true }); return true; });
+handle('cloud:getKey', (_event, id) => readKey(cloudName(id)) ?? '');
+handle('cloud:setKey', (_event, id, key) => { writeKey(cloudName(id), key); return true; });
+handle('cloud:clearKey', (_event, id) => { fs.rmSync(keyFile(cloudName(id)), { force: true }); return true; });
 
 // 여러 장 저장: 사용자가 고른 폴더 안에만, 파일 이름만 받아서 쓴다.
 let batchFolder = null;
-ipcMain.handle('batch:pickFolder', async event => {
+handle('batch:pickFolder', async event => {
   const picked = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), { title: '도트 그림을 저장할 폴더', properties: ['openDirectory', 'createDirectory'] });
   batchFolder = picked.canceled ? null : picked.filePaths[0];
   return batchFolder && path.basename(batchFolder);
@@ -71,11 +96,6 @@ function writeWithoutOverwrite(folder, filename, bytes) {
   }
 }
 
-ipcMain.handle('batch:write', (_event, name, png) => {
-  if (!batchFolder) throw new Error('저장할 폴더를 고르지 않았습니다.');
-  return writeWithoutOverwrite(batchFolder, path.basename(String(name)), Buffer.from(png));
-});
-
 // 완성 PNG 저장(윈도우): 고르기를 켜면 저장 대화상자에서 고른 곳에, 끄면 내 문서에 바로 쓴다.
 // 화면이 준 폴더 경로에는 직접 쓰지 않고, 대화상자의 시작 위치로만 쓴다.
 const isFolder = folder => {
@@ -88,9 +108,23 @@ const pngName = name => {
   if (/^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\.|$)/i.test(stem)) stem = '_' + stem;
   return `${stem || 'dotmaker'}.png`;
 };
-ipcMain.handle('result:savePNG', async (event, name, png, chooseLocation, rememberedFolder) => {
+// PNG 시작 표시(89 50 4E 47 0D 0A 1A 0A)가 있는 바이트만 PNG 파일로 쓴다.
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+function pngBytes(png) {
+  if (!ArrayBuffer.isView(png) || png.BYTES_PER_ELEMENT !== 1 || png.byteLength < PNG_MAGIC.length) throw new Error('PNG 그림 데이터가 아닙니다.');
+  const bytes = Buffer.from(png.buffer, png.byteOffset, png.byteLength);
+  if (!bytes.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)) throw new Error('PNG 그림 데이터가 아닙니다.');
+  return bytes;
+}
+
+handle('batch:write', (_event, name, png) => {
+  if (!batchFolder) throw new Error('저장할 폴더를 고르지 않았습니다.');
+  return writeWithoutOverwrite(batchFolder, pngName(name), pngBytes(png));
+});
+
+handle('result:savePNG', async (event, name, png, chooseLocation, rememberedFolder) => {
   const filename = pngName(name);
-  const bytes = Buffer.from(png);
+  const bytes = pngBytes(png);
   const documents = app.getPath('documents');
   if (!chooseLocation) return { name: writeWithoutOverwrite(documents, filename, bytes), folder: documents };
 
@@ -127,6 +161,8 @@ const canAutoUpdate = () => app.isPackaged && (process.platform === 'win32' || p
 let updater = null;
 let updateState = 'idle';  // idle · checking · downloading · ready
 let manualCheck = false;   // 사용자가 직접 '업데이트 확인'을 눌렀으면 결과(최신·오류)도 알려 준다
+let readyVersion = null;   // 다 받아 둔 새 버전
+let reportedError = null;  // 같은 오류가 'error' 이벤트와 Promise 거절로 두 번 와도 창은 한 번만
 
 function mainWindow() { return BrowserWindow.getAllWindows()[0] ?? null; }
 function ask(options) { const window = mainWindow(); return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options); }
@@ -167,20 +203,27 @@ function startUpdater() {
     manualCheck = false;
   });
   updater.on('download-progress', progress => mainWindow()?.setProgressBar(progress.percent / 100));
-  updater.on('update-downloaded', async info => {
+  updater.on('update-downloaded', info => {
     updateState = 'ready';
+    readyVersion = info.version;
     mainWindow()?.setProgressBar(-1);
-    const { response } = await ask({
-      type: 'info', buttons: ['지금 다시 켜기', '끌 때 설치'], defaultId: 0, cancelId: 1,
-      title: '업데이트 준비 완료', message: `도트메이커 ${info.version}을(를) 다 받았습니다.`,
-      detail: '지금 다시 켜면 바로 새 버전으로 바뀝니다. 작업 중이면 \'끌 때 설치\'를 고르세요.',
-    });
-    if (response === 0) setImmediate(() => updater.quitAndInstall(true, true));  // 설치 창 없이, 설치 뒤 다시 켜기
+    askInstall();
   });
   updater.on('error', error => updateFailed(error, updateState === 'downloading'));
 }
 
+async function askInstall() {
+  const { response } = await ask({
+    type: 'info', buttons: ['지금 다시 켜기', '끌 때 설치'], defaultId: 0, cancelId: 1,
+    title: '업데이트 준비 완료', message: `도트메이커 ${readyVersion ?? '새 버전'}을(를) 다 받았습니다.`,
+    detail: '지금 다시 켜면 바로 새 버전으로 바뀝니다. 작업 중이면 \'끌 때 설치\'를 고르세요.',
+  });
+  if (response === 0) setImmediate(() => updater.quitAndInstall(true, true));  // 설치 창 없이, 설치 뒤 다시 켜기
+}
+
 function updateFailed(error, loud) {
+  if (error && error === reportedError) return;
+  reportedError = error;
   console.error('업데이트 실패:', error);
   mainWindow()?.setProgressBar(-1);
   const wasManual = manualCheck;
@@ -196,7 +239,7 @@ function updateFailed(error, loud) {
 function checkForUpdates(manual) {
   if (!updater || updateState !== 'idle') {
     if (manual && updateState === 'downloading') ask({ type: 'info', buttons: ['확인'], title: '업데이트', message: '새 버전을 받는 중입니다.' });
-    if (manual && updateState === 'ready') updater.quitAndInstall(true, true);
+    if (manual && updateState === 'ready') askInstall();
     return;
   }
   manualCheck = manual;
@@ -204,8 +247,8 @@ function checkForUpdates(manual) {
   updater.checkForUpdates().catch(error => updateFailed(error, false));
 }
 
-ipcMain.handle('update:supported', () => Boolean(updater));
-ipcMain.handle('update:check', () => { checkForUpdates(true); return true; });
+handle('update:supported', () => Boolean(updater));
+handle('update:check', () => { checkForUpdates(true); return true; });
 
 function createWindow() {
   const window = new BrowserWindow({
@@ -217,11 +260,18 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true },
   });
   window.removeMenu();
-  // 설명서의 바깥 링크는 기본 브라우저로 연다.
+  // 설명서의 바깥 링크(https만)는 기본 브라우저로 연다. 창 안에서는 도트메이커 파일 밖으로 이동하지 않는다.
+  const openOutside = url => { if (/^https:/i.test(url)) shell.openExternal(url); };
   window.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/.test(url)) shell.openExternal(url);
+    openOutside(url);
     return { action: 'deny' };
   });
+  window.webContents.on('will-navigate', (event, url) => {
+    if (url.startsWith('file:')) return;
+    event.preventDefault();
+    openOutside(url);
+  });
+  window.webContents.on('will-redirect', event => event.preventDefault());
   window.loadFile(path.join(__dirname, '..', 'dist', '도트메이커.html'));
 }
 

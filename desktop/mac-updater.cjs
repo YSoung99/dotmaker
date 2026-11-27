@@ -2,21 +2,37 @@
 // 1) 릴리스의 latest-mac.yml로 새 버전을 확인 → 2) zip을 받아 sha512로 확인하고 풀어 둠
 // → 3) 프로그램을 끈 뒤 /Applications의 DotMaker.app을 새 것으로 바꾸고 다시 켠다.
 // main.cjs가 electron-updater와 똑같이 쓰도록 같은 이벤트(update-available 등)와 메서드를 낸다.
-const { app } = require('electron');
 const { EventEmitter } = require('node:events');
+const { Readable, Transform } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
 const { spawn, execFileSync } = require('node:child_process');
 const crypto = require('node:crypto');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 
-/** latest-mac.yml(electron-builder가 만드는 형식)에서 버전과 zip 파일 정보만 읽는다. */
-function parseFeed(text) {
+// electron은 실행할 때만 불러온다(단위 시험에서 parseFeed·newer·pickMacZip만 꺼내 쓸 수 있게).
+const electronApp = () => require('electron').app;
+
+/**
+ * 이 맥의 칩(arch)에 맞는 zip만 고른다. 다른 칩용 zip으로는 절대 바꾸지 않는다(arm64 맥에 x64 앱이 깔리는 사고 방지).
+ * 이름에 칩이 없는 zip은 electron-builder 기본(x64)이라 x64에서만 쓴다.
+ */
+function pickMacZip(files, arch = process.arch) {
+  const zips = files.filter(f => f.url.endsWith('.zip'));
+  const named = zips.find(f => new RegExp(`[-_.]${arch}[-_.]`).test(f.url));
+  if (named) return named;
+  if (arch === 'x64') return zips.find(f => !/[-_.](arm64|universal)[-_.]/.test(f.url)) ?? null;
+  return zips.find(f => /[-_.]universal[-_.]/.test(f.url)) ?? null;
+}
+
+/** latest-mac.yml(electron-builder가 만드는 형식)에서 버전과 이 맥에 맞는 zip 파일 정보만 읽는다. */
+function parseFeed(text, arch = process.arch) {
   const version = /^version:\s*['"]?([^'"\s]+)/m.exec(text)?.[1];
   const files = [...text.matchAll(/-\s+url:\s*['"]?([^'"\s]+)['"]?\s*\n\s+sha512:\s*['"]?([^'"\s]+)['"]?(?:\s*\n\s+size:\s*(\d+))?/g)]
     .map(m => ({ url: m[1], sha512: m[2], size: m[3] ? Number(m[3]) : 0 }));
-  const zip = files.find(f => f.url.endsWith('.zip') && f.url.includes(process.arch)) ?? files.find(f => f.url.endsWith('.zip'));
-  if (!version || !zip) throw new Error('업데이트 정보(latest-mac.yml)를 읽지 못했습니다.');
+  const zip = pickMacZip(files, arch);
+  if (!version || !zip) throw new Error('업데이트 정보(latest-mac.yml)를 읽지 못했거나 이 맥에 맞는 파일이 없습니다.');
   return { version, zip };
 }
 
@@ -38,7 +54,7 @@ class MacUpdater extends EventEmitter {
     this.ready = null;          // 받아서 푼 새 앱 경로
     this.autoInstallOnAppQuit = true;
     this.installing = false;
-    app.on('before-quit', () => { if (this.ready && this.autoInstallOnAppQuit && !this.installing) this.install(false); });
+    electronApp().on('before-quit', () => { if (this.ready && this.autoInstallOnAppQuit && !this.installing) this.install(false); });
   }
 
   setFeedURL({ url }) { this.feedURL = url.replace(/\/?$/, '/'); }
@@ -55,7 +71,7 @@ class MacUpdater extends EventEmitter {
       const reply = await fetch(`${feed}?t=${Date.now()}`, { signal: AbortSignal.timeout(15_000) });
       if (!reply.ok) throw new Error(`업데이트 정보를 받지 못했습니다 (${reply.status}).`);
       const info = parseFeed(await reply.text());
-      if (newer(info.version, app.getVersion())) { this.info = info; this.emit('update-available', { version: info.version }); }
+      if (newer(info.version, electronApp().getVersion())) { this.info = info; this.emit('update-available', { version: info.version }); }
       else this.emit('update-not-available', { version: info.version });
       return { updateInfo: info };
     } catch (error) {
@@ -65,24 +81,30 @@ class MacUpdater extends EventEmitter {
   }
 
   async downloadUpdate() {
+    let dir = null;
     try {
       if (!this.info) throw new Error('먼저 업데이트를 확인해 주세요.');
       this.target();  // 바꿀 수 없는 곳에 설치돼 있으면 받기 전에 알려 준다
       const { version, zip } = this.info;
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dotmaker-update-'));
+      // 예전에 받아 둔 것이 있으면 지우고 새로 받는다.
+      if (this.ready) { fs.rmSync(this.ready.dir, { recursive: true, force: true }); this.ready = null; }
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dotmaker-update-'));
       const file = path.join(dir, path.basename(zip.url));
       const reply = await fetch(this.fileURL(zip.url, version), { signal: AbortSignal.timeout(30 * 60_000) });
       if (!reply.ok || !reply.body) throw new Error(`새 버전 파일을 받지 못했습니다 (${reply.status}).`);
       const total = Number(reply.headers.get('content-length')) || zip.size || 0;
-      const hash = crypto.createHash('sha512'), out = fs.createWriteStream(file);
+      const hash = crypto.createHash('sha512');
       let received = 0;
-      for await (const chunk of reply.body) {
-        hash.update(chunk);
-        received += chunk.length;
-        if (!out.write(chunk)) await new Promise(resolve => out.once('drain', resolve));
-        if (total) this.emit('download-progress', { percent: Math.min(100, received / total * 100), transferred: received, total });
-      }
-      await new Promise((resolve, reject) => out.end(error => (error ? reject(error) : resolve())));
+      // pipeline은 중간에 끊겨도 파일 핸들을 닫아 준다.
+      const measure = new Transform({
+        transform: (chunk, _encoding, done) => {
+          hash.update(chunk);
+          received += chunk.length;
+          if (total) this.emit('download-progress', { percent: Math.min(100, received / total * 100), transferred: received, total });
+          done(null, chunk);
+        },
+      });
+      await pipeline(Readable.fromWeb(reply.body), measure, fs.createWriteStream(file));
       if (hash.digest('base64') !== zip.sha512) throw new Error('받은 파일이 손상되었습니다(확인 값이 다름). 다시 해 보세요.');
       const unpacked = path.join(dir, 'app');
       execFileSync('ditto', ['-x', '-k', file, unpacked]);
@@ -92,6 +114,7 @@ class MacUpdater extends EventEmitter {
       this.emit('update-downloaded', { version });
       return [file];
     } catch (error) {
+      if (dir) fs.rmSync(dir, { recursive: true, force: true });
       this.emit('error', error);
       throw error;
     }
@@ -129,8 +152,8 @@ class MacUpdater extends EventEmitter {
   }
 
   quitAndInstall() {
-    if (this.install(true)) app.quit();
+    if (this.install(true)) electronApp().quit();
   }
 }
 
-module.exports = { MacUpdater, parseFeed, newer };
+module.exports = { MacUpdater, parseFeed, newer, pickMacZip };

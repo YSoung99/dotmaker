@@ -32,6 +32,10 @@ function savedSettings() {
   for (const key of Object.keys(base)) if (typeof saved[key] === typeof base[key]) base[key] = saved[key];
   if (!dotMethodName(base.method)) base.method = 'faithful';
   if (!['auto', 'ai', 'keep'].includes(base.background)) base.background = 'auto';
+  if (!['auto', 'strong', 'light', 'off'].includes(base.upscale)) base.upscale = 'auto';
+  if (!['off', 'custom', ...Object.keys(PALETTES)].includes(base.palette)) base.palette = 'off';
+  if (![0, 8, 16, 24, 32].includes(base.autoColors)) base.autoColors = 0;
+  base.outlineStack = outlineStackLayers(base.outlineStack) / 10;
   return base;
 }
 function savedView() {
@@ -41,6 +45,11 @@ function savedView() {
     grid: v.grid === true,
     bg: ['checker', 'white', 'black'].includes(v.bg) ? v.bg : 'checker',
   };
+}
+/** 저장된 숫자 설정: 숫자가 아니면 기본값, 범위 밖이면 끝값, 간격에 맞춰 반올림. */
+function savedNumber(key, fallback, min, max, step) {
+  const v = store.get(key, fallback);
+  return Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v / step) * step)) : fallback;
 }
 const savedSize = () => String(isSize(store.get('size', null)) ? store.get('size', null) : SETTINGS.size.initial);
 
@@ -73,11 +82,11 @@ const state = {
   cloud: {          // AI 보정(클라우드). 고른 서비스와 설정은 다음에도 기억한다.
     provider: ['pixellab', 'gemini', 'openai'].includes(store.get('cloud.provider', 'pixellab')) ? store.get('cloud.provider', 'pixellab') : 'pixellab',
     faithful: store.get('cloud.faithful', true),
-    strength: store.get('cloud.strength', 300),
+    strength: savedNumber('cloud.strength', 300, 0, 600, 50),
     quality: ['low', 'medium', 'high'].includes(store.get('cloud.quality', 'medium')) ? store.get('cloud.quality', 'medium') : 'medium',
     model: store.get('cloud.model', 'sunburst') === 'flare' ? 'flare' : 'sunburst',   // OpenAI: Flare(빠름) / Sunburst(정밀)
     mode: store.get('cloud.mode', 'redraw') === 'correct' ? 'correct' : 'redraw',  // PixelLab: 다시 그리기 / 다듬기
-    fix: store.get('cloud.fix', 0.1),                                                  // 다듬기 강도 0~1
+    fix: Math.round(savedNumber('cloud.fix', 0.1, 0, 1, 0.01) * 100) / 100,             // 다듬기 강도 0~1
     editingKey: false,
     input: null,    // 따로 넣은 그림 { name, picture } — 있으면 도트화 탭 대신 이 그림을 보낸다
     result: null,   // { ai, final, pixel, status }
@@ -91,13 +100,16 @@ const engine = (() => {
   const code = document.querySelector('script[data-app]').textContent;
   const shared = code.slice(code.indexOf('/*SHARED-START*/'), code.indexOf('/*SHARED-END*/'));
   const source = `const nativeAdaptiveAvailable = ${Boolean(desktop?.resizeAdaptive)};\n` + shared + '\n' + $('worker-src').textContent;
-  let worker;
-  try {
-    worker = new Worker(URL.createObjectURL(new Blob([source], { type: 'text/javascript' })));
-  } catch (error) {
-    console.error(error);
-  }
-  let running = null, waiting = [], nextId = 1;
+  // 진행 소식 없이 이만큼 지나면 작업자가 멈춘 것으로 보고 다시 띄운다. AI·그림 열기처럼 오래 걸릴 수 있는 일은 넉넉히.
+  const LIGHT_JOBS = new Set(['subject', 'jev', 'jevStrokes', 'jevFills']);
+  const watchdogMs = type => (LIGHT_JOBS.has(type) ? 120000 : 300000);
+  const CANCELLED = '새 작업이 들어와 진행 중이던 작업을 취소했습니다.';
+  let worker = null, running = null, waiting = [], nextId = 1, timer = 0;
+  let lastOpen = null, crashes = 0; // 마지막으로 연 그림(다시 띄운 뒤 다시 열기용), 연달아 죽은 횟수
+  const arm = () => {
+    clearTimeout(timer);
+    if (running) timer = setTimeout(() => restart('작업이 너무 오래 응답하지 않아 작업자를 다시 시작했습니다.'), watchdogMs(running.type));
+  };
   const pump = () => {
     if (running || waiting.length === 0) return;
     running = waiting.shift();
@@ -105,49 +117,85 @@ const engine = (() => {
     state.error = null;
     update();
     worker.postMessage({ id: running.id, type: running.type, ...running.payload });
+    arm();
   };
-  const done = () => { running = null; if (waiting.length === 0) state.busy = null; pump(); update(); };
-  if (worker) {
-    worker.onmessage = ({ data }) => {
-      if (data.type === 'adaptive-native') {
-        desktop.resizeAdaptive(data.source, data.width, data.height).then(bytes => {
-          worker.postMessage({ type: 'adaptive-native-response', bytes }, [bytes.buffer]);
-        }).catch(error => {
-          worker.postMessage({ type: 'adaptive-native-response', error: error.message });
-        });
-        return;
-      }
-      if (!running || data.id !== running.id) return;
-      if (data.type === 'progress') { state.busy = data.label; updateStatus(); return; }
-      if (data.type === 'error') { state.error = data.message; running.fail?.(data.message, data); }
-      else running.apply(data);
-      done();
-    };
-    worker.onerror = event => {
-      event.preventDefault();
-      state.error = `${Errors.render} (${event.message})`;
-      const failed = waiting;
-      waiting = [];
-      for (const job of failed) job.fail?.(state.error);
-      running?.fail?.(state.error);
-      if (running) done(); else update();
-    };
-  }
+  const done = () => { clearTimeout(timer); running = null; if (waiting.length === 0) state.busy = null; pump(); update(); };
+  const enqueue = job => {
+    if (!worker) { state.error = '이 브라우저에서 작업자를 시작하지 못했습니다. 크롬·엣지 최신 버전으로 열어 주세요.'; update(); job.fail?.(state.error); return; }
+    const drops = { open: ['open', 'resize', 'redot'], resize: ['resize', 'redot'], redot: ['redot'], lab: ['lab'] }[job.type] ?? [];
+    const cancelled = waiting.filter(other => drops.includes(other.type));
+    waiting = waiting.filter(other => !drops.includes(other.type));
+    for (const other of cancelled) other.fail?.('새 작업이 들어와 대기 중이던 작업을 취소했습니다.');
+    // 돌고 있는 일도 새 일이 덮어쓰면 작업자에게 멈추라고 알린다(다음 진행 단계에서 멈춘다).
+    if (running && drops.includes(running.type) && !running.cancelSent) {
+      running.cancelSent = true;
+      worker.postMessage({ type: 'cancel', id: running.id });
+    }
+    waiting.push({ id: nextId++, ...job });
+    if (running) { state.busy = job.label; updateStatus(); }
+    pump();
+  };
+  const receive = ({ data }) => {
+    if (data.type === 'adaptive-native') {
+      // 프로그램 본체가 줄이는 동안에는 작업자가 진행 소식을 보낼 수 없으니 감시를 멈춘다.
+      const target = worker;
+      clearTimeout(timer);
+      const reply = message => { if (target !== worker) return; arm(); target.postMessage(message, message.bytes ? [message.bytes.buffer] : []); };
+      desktop.resizeAdaptive(data.source, data.width, data.height)
+        .then(bytes => reply({ type: 'adaptive-native-response', requestId: data.requestId, bytes }))
+        .catch(error => reply({ type: 'adaptive-native-response', requestId: data.requestId, error: error.message }));
+      return;
+    }
+    if (!running || data.id !== running.id) return;
+    if (data.type === 'progress') { arm(); state.busy = data.label; updateStatus(); return; }
+    if (!running.recovery) crashes = 0;
+    if (data.type === 'cancelled') running.fail?.(CANCELLED);
+    else if (data.type === 'error') { state.error = data.message; running.fail?.(data.message, data); }
+    else {
+      if (running.type === 'open') lastOpen = running.payload;
+      running.apply(data);
+    }
+    done();
+  };
+  const startWorker = () => {
+    const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+    try {
+      worker = new Worker(url);
+      worker.onmessage = receive;
+      worker.onerror = event => { event.preventDefault(); restart(`${Errors.render} (${event.message})`); };
+    } catch (error) {
+      console.error(error);
+      worker = null;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  };
+  /** 작업자가 죽거나 멈추면 새로 띄운다. 기다리던 일은 모두 실패로 알리고, 화면이 바쁨 상태에 갇히지 않게 한다. */
+  const restart = message => {
+    clearTimeout(timer);
+    worker?.terminate();
+    const failed = [running, ...waiting].filter(Boolean);
+    running = null;
+    waiting = [];
+    state.workerBusy = null;
+    state.error = message;
+    startWorker();
+    for (const job of failed) job.fail?.(message);
+    // 새 작업자에는 열어 둔 그림이 없으니 한 번만 다시 연다(연달아 죽으면 되풀이하지 않는다).
+    if (lastOpen && worker && ++crashes <= 1) reopenAfterRestart(lastOpen);
+    update();
+  };
+  startWorker();
   return {
-    submit(type, payload, label, apply, fail) {
-      if (!worker) { state.error = '이 브라우저에서 작업자를 시작하지 못했습니다. 크롬·엣지 최신 버전으로 열어 주세요.'; update(); fail?.(state.error); return; }
-      const drops = { open: ['open', 'resize', 'redot'], resize: ['resize', 'redot'], redot: ['redot'], lab: ['lab'] }[type] ?? [];
-      const cancelled = waiting.filter(job => drops.includes(job.type));
-      waiting = waiting.filter(job => !drops.includes(job.type));
-      for (const job of cancelled) job.fail?.('새 작업이 들어와 대기 중이던 작업을 취소했습니다.');
-      waiting.push({ id: nextId++, type, payload, label, apply, fail });
-      if (running) { state.busy = label; updateStatus(); }
-      pump();
-    },
+    submit(type, payload, label, apply, fail) { enqueue({ type, payload, label, apply, fail }); },
+    /** 작업자를 다시 띄운 뒤 그림을 다시 여는 일(이 일이 성공해도 연달아 죽은 횟수를 지우지 않는다). */
+    recover(payload, label, apply) { enqueue({ type: 'open', payload, label, apply, recovery: true }); },
     /** 결과를 기다릴 수 있는 요청(실패하면 오류 문구로 거부) */
     request(type, payload, label) {
       return new Promise((resolve, reject) => this.submit(type, payload, label, resolve, message => reject(new Error(message))));
     },
+    /** 저장된 AI 파일을 지울 때 작업자가 메모리에 올린 AI 세션도 놓게 한다. */
+    clearAI() { worker?.postMessage({ type: 'clearAI' }); },
   };
 })();
 
@@ -160,13 +208,17 @@ async function decode(file) {
     throw new DotError(Errors.read);
   }
   const { width: w, height: h } = bitmap;
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  const context = canvas.getContext('2d', { willReadFrequently: true });
-  context.drawImage(bitmap, 0, 0);
-  const straight = context.getImageData(0, 0, w, h).data;
-  bitmap.close();
+  let straight;
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    context.drawImage(bitmap, 0, 0);
+    straight = context.getImageData(0, 0, w, h).data;
+  } finally {
+    bitmap.close();
+  }
   // 맥 CGImage처럼 프리멀티플라이 바이트로 바꾼다.
   const data = new Uint8Array(straight.length);
   for (let i = 0; i < straight.length; i += 4) {
@@ -179,18 +231,31 @@ async function decode(file) {
   return limitSize({ w, h, data });
 }
 
+// 그림마다 한 번만 바이트를 캔버스에 올려 두고, 다시 그릴 때는 그 캔버스를 복사한다(화면을 다시 그릴 때마다 바이트를 복사하지 않게).
+const renderedPictures = new WeakMap();
+
+/** 그림을 새 캔버스로(호출할 때마다 새 캔버스라 화면 여러 곳에 붙이거나 고쳐 그려도 서로 영향이 없다). */
 function toCanvas(picture) {
+  let source = renderedPictures.get(picture);
+  if (!source || source.width !== picture.w || source.height !== picture.h) {
+    source = document.createElement('canvas');
+    source.width = picture.w;
+    source.height = picture.h;
+    const bytes = new Uint8ClampedArray(picture.bytes.buffer, picture.bytes.byteOffset, picture.w * picture.h * 4);
+    source.getContext('2d').putImageData(new ImageData(bytes, picture.w, picture.h), 0, 0);
+    renderedPictures.set(picture, source);
+  }
   const canvas = document.createElement('canvas');
   canvas.width = picture.w;
   canvas.height = picture.h;
-  canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(picture.bytes), picture.w, picture.h), 0, 0);
+  canvas.getContext('2d').drawImage(source, 0, 0);
   return canvas;
 }
 
 /** 정수배 확대: 한 픽셀을 k×k 칸으로 그대로 늘린다(번짐 없음). */
 function scaled(picture, k) {
   if (k <= 1) return picture;
-  const w = picture.w * k, h = picture.h * k, src = new Uint32Array(picture.bytes.buffer.slice(0)), out = new Uint32Array(w * h);
+  const w = picture.w * k, h = picture.h * k, src = new Uint32Array(picture.bytes.buffer, picture.bytes.byteOffset, picture.w * picture.h), out = new Uint32Array(w * h);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) out[y * w + x] = src[((y / k) | 0) * picture.w + ((x / k) | 0)];
   return { w, h, bytes: new Uint8ClampedArray(out.buffer) };
 }
@@ -291,7 +356,12 @@ function openFiles(files) {
 }
 
 async function pickBatchFolder() {
-  if (!desktop?.pickFolder) return null;
+  if (!desktop?.pickFolder) {
+    // 웹에서는 폴더에 여러 장을 저장할 수 없다. 조용히 무시하지 않고 알린다.
+    state.notice = '여러 장을 한 번에 변환하는 기능은 데스크톱 프로그램에서만 됩니다. 웹에서는 한 장씩 열어 주세요.';
+    update();
+    return null;
+  }
   state.operation = '저장할 폴더 선택 중';
   update();
   try {
@@ -358,10 +428,29 @@ async function open(file, whole = false) {
   }
   const settings = { ...state.settings };
   submittedSettings = settings;
-  engine.submit('open', { original, w: size[0], h: size[1], settings, whole }, whole ? '그림 전체를 그대로 변환 중' : '원본에서 캐릭터 분리 중',
-    data => applyOpened(data, original, file.name),
+  const payload = { original, w: size[0], h: size[1], settings, whole };
+  engine.submit('open', payload, whole ? '그림 전체를 그대로 변환 중' : '원본에서 캐릭터 분리 중',
+    data => { applyOpened(data, original, file.name); syncAfterOpen(payload); },
     // 캐릭터 분리에 실패하면 그냥 끝내지 않고, 분리 없이 그대로 변환할지 고르게 한다.
     (message, data) => { if (data?.canSkip) state.retryWhole = file; });
+}
+
+/** 그림을 여는 동안 바꾼 크기·설정을 연 뒤에 적용한다(처음 열 때는 결과가 없어 바로 다시 그리지 못한다). */
+function syncAfterOpen(payload) {
+  submittedSettings = payload.settings;
+  if (String(payload.w) !== state.width || String(payload.h) !== state.height) resize();
+  else redot();
+}
+
+/** 작업자를 새로 띄우면 작업자 쪽 원본이 사라지므로, 화면에 보이는 그림을 같은 원본으로 다시 연다(탭·비교 상태는 그대로). */
+function reopenAfterRestart(payload) {
+  if (!state.product) return;
+  engine.recover(payload, '작업자에 문제가 생겨 다시 시작했습니다 · 그림을 다시 여는 중', data => {
+    applyProduct(data);
+    state.aligned = null;
+    if (state.compare) loadAligned();
+    syncAfterOpen(payload);
+  });
 }
 
 function resize() {
@@ -595,11 +684,37 @@ function stepSettings(back) {
 }
 
 /** 글자를 입력하는 칸(입력칸·글상자)에 포커스가 있는지. 이때는 브라우저 기본 되돌리기를 쓴다. */
-const typing = () => document.activeElement?.matches('textarea, [contenteditable], input:not([type=checkbox]):not([type=radio]):not([type=color]):not([type=file])');
+const typing = () => document.activeElement?.matches('textarea, [contenteditable], input:not([type=checkbox]):not([type=radio]):not([type=color]):not([type=file]):not([type=range])');
 
 // ───────────── AI 파일(설명서 탭)
+/** 저장소 이름(작업자 ai.js와 같은 규칙): sha256을 붙여 파일 목록이 바뀌면 예전 파일을 쓰지 않는다. */
+const storeKey = id => `${id}:${AI_FILES[id].sha256}`;
+
+/** 지금 목록에 없는 저장 파일을 지운다. 예전 이름(sha256 없이 id만)으로 저장된 파일은 내용이 맞으면 새 이름으로 옮긴다. */
+async function pruneAIFiles(keys, current) {
+  const remove = key => fileStore.run('readwrite', s => s.delete(key));
+  for (const key of keys) {
+    if (current.has(key)) continue;
+    try {
+      if (AI_FILES[key] && !current.has(storeKey(key))) {
+        const bytes = await fileStore.get(key);
+        if (bytes && await matchesHash(key, bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes))) await fileStore.put(storeKey(key), bytes);
+      }
+      await remove(key);
+    } catch (error) {
+      console.error(error);
+    }
+  }
+}
+
 async function refreshAIFiles() {
-  state.aiFiles = await fileStore.keys();
+  const current = new Set(Object.keys(AI_FILES).map(storeKey));
+  let keys = await fileStore.keys();
+  if (keys.some(key => !current.has(key))) {
+    await pruneAIFiles(keys, current);
+    keys = await fileStore.keys();
+  }
+  state.aiFiles = keys;
   if (state.stage === 'help') update();
 }
 
@@ -613,7 +728,7 @@ async function importAIFiles(files) {
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
       if (!(await matchesHash(id, bytes))) { unknown.push(`${file.name}(크기는 같지만 내용이 원본과 다름)`); continue; }
-      await fileStore.put(id, bytes);
+      await fileStore.put(storeKey(id), bytes);
       saved.push(AI_FILES[id].name);
     } catch (error) {
       console.error(error);
@@ -628,7 +743,8 @@ async function importAIFiles(files) {
 async function clearAIFiles() {
   if (!confirm('저장된 AI 파일을 모두 지울까요? 다시 쓰려면 다시 받아야 합니다.')) return;
   await fileStore.clear().catch(() => {});
-  state.aiMessage = '저장된 AI 파일을 지웠습니다. 열려 있는 AI는 페이지를 새로 고치면 완전히 지워집니다.';
+  engine.clearAI();
+  state.aiMessage = '저장된 AI 파일을 지웠습니다. 메모리에 올라가 있던 AI도 지금 하던 일이 끝나면 놓습니다.';
   await refreshAIFiles();
 }
 
@@ -655,6 +771,15 @@ function preview(title, picture, pixelated, action = null) {
   return el('section', { className: 'preview' }, head, frame);
 }
 
+// 미리보기 칸 크기 감시는 하나만 두고 칸마다 다시 맞출 함수를 붙인다. 화면에서 빠진 칸은 감시를 끊는다.
+const frameLayouts = new WeakMap();
+const frameObserver = new ResizeObserver(entries => {
+  for (const { target } of entries) {
+    if (target.isConnected) frameLayouts.get(target)?.();
+    else frameObserver.unobserve(target);
+  }
+});
+
 /** 도트 그림 미리보기: 확대(맞춤은 3배 이상이면 칸이 고르게 정수배로)·픽셀 격자. 격자는 한 칸이 4px 이상일 때만 보인다. */
 function pixelFrame(frame, canvas, picture) {
   const wrap = el('div', { className: 'pixwrap' }, canvas);
@@ -673,7 +798,8 @@ function pixelFrame(frame, canvas, picture) {
     wrap.style.setProperty('--cell', `${k}px`);
     wrap.classList.toggle('grid', state.view.grid && k >= 4);
   };
-  new ResizeObserver(layout).observe(frame);
+  frameLayouts.set(frame, layout);
+  frameObserver.observe(frame);
 }
 
 /** 미리보기 위 '보기' 줄: 확대, 격자, 배경. 고른 값은 다음에 켤 때도 그대로. */
@@ -1031,7 +1157,7 @@ function helpScreen() {
   const table = el('table', { className: 'files' },
     el('thead', {}, el('tr', {}, ...['상태', '파일 이름', '크기', '용도', '받는 주소'].map(t => el('th', { textContent: t })))),
     el('tbody', {}, ...Object.entries(AI_FILES).map(([id, f]) => el('tr', {},
-      el('td', { className: stored.has(id) ? 'ok' : 'missing', textContent: state.aiFiles === null ? '확인 중' : stored.has(id) ? '저장됨' : '없음' }),
+      el('td', { className: stored.has(storeKey(id)) ? 'ok' : 'missing', textContent: state.aiFiles === null ? '확인 중' : stored.has(storeKey(id)) ? '저장됨' : '없음' }),
       el('td', {}, el('code', { textContent: f.name }), el('div', { className: 'muted', textContent: f.title })),
       el('td', { className: 'num', textContent: mb(f.size) }),
       el('td', { textContent: f.use }),
@@ -1158,10 +1284,25 @@ function update() {
   $('scale').value = String(state.exportScale);
   const scroll = $('panel').firstChild?.scrollTop ?? 0;
   const sheetScroll = document.querySelector('.sheet')?.scrollTop ?? 0;
+  const focus = focusedControl();
   $('panel').replaceChildren(screen(state.stage));
   $('panel').firstChild.scrollTop = scroll;
   const sheet = document.querySelector('.sheet');
   if (sheet) sheet.scrollTop = sheetScroll;
+  restoreFocus(focus);
+}
+
+// 화면을 다시 그리면 조작하던 칸이 새로 만들어져 키보드 포커스가 사라진다. 같은 순서·같은 종류의 칸으로 되돌린다.
+const FOCUSABLE = 'button, input, select, textarea, a[href], [tabindex]';
+function focusedControl() {
+  const active = document.activeElement;
+  if (!active || !$('panel').contains(active)) return null;
+  return { index: [...$('panel').querySelectorAll(FOCUSABLE)].indexOf(active), tag: active.tagName, type: active.type };
+}
+function restoreFocus(focus) {
+  if (!focus || focus.index < 0) return;
+  const target = $('panel').querySelectorAll(FOCUSABLE)[focus.index];
+  if (target && target.tagName === focus.tag && target.type === focus.type && !target.disabled) target.focus({ preventScroll: true });
 }
 
 // ───────────── 시작
@@ -1183,7 +1324,8 @@ for (const tab of document.querySelectorAll('[data-stage]')) {
   tab.onclick = () => { state.stage = tab.dataset.stage; update(); };
 }
 $('tabs').onkeydown = event => {
-  const order = Object.keys(STAGES);
+  // 화면에 있는 탭만 오간다(목록에서 뺀 실험실 2 탭으로 가지 않게).
+  const order = [...document.querySelectorAll('#tabs [data-stage]')].filter(tab => !tab.hidden).map(tab => tab.dataset.stage);
   const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
   if (!step) return;
   state.stage = order[(order.indexOf(state.stage) + step + order.length) % order.length];
@@ -1196,6 +1338,7 @@ document.addEventListener('keydown', event => {
   if (key === 'o') { event.preventDefault(); $('open').click(); }
   if (key === 's') { event.preventDefault(); save(); }
   if (key === 'z' && !typing()) { event.preventDefault(); stepSettings(!event.shiftKey); }
+  if (key === 'y' && !event.shiftKey && !typing()) { event.preventDefault(); stepSettings(false); }
 });
 let dragDepth = 0;
 document.addEventListener('dragenter', event => { event.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });

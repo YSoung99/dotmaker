@@ -1,6 +1,11 @@
 // 작업자(Web Worker): 변환과 AI를 화면과 따로 돌려 처리 중에도 창이 멈추지 않게 한다.
 // 일은 들어온 순서대로 하나씩 한다. 원본·캐릭터·선 지도는 여기 두고, 화면에는 결과 그림만 보낸다.
-let current = null; // { raw, wanted, upscaled, skipped, background, subject, faithful, whole }
+let current = null; // { raw, wanted, upscaled, skipped, background, subject, faithful, whole, upscaleCache }
+// 화면이 취소한 일 id. 일이 진행 단계(progress)를 알릴 때마다 보고 멈춘다.
+const cancelled = new Set();
+// 지금 열어 둔 그림(current)이 있어야 하는 일. 작업자를 새로 띄운 직후에는 current가 없다.
+const NEEDS_CURRENT = new Set(['resize', 'redot', 'jev', 'jevStrokes', 'jevFills', 'jevRender', 'subject']);
+const cancelError = () => Object.assign(new DotError('취소했습니다.'), { cancelled: true });
 
 const picture = raster => ({ w: raster.grid.w, h: raster.grid.h, bytes: raster.straightBytes() });
 
@@ -33,8 +38,16 @@ async function finish(id, settings, progress) {
 }
 
 async function handle(job) {
-  const progress = label => self.postMessage({ id: job.id, type: 'progress', label });
+  const progress = label => {
+    if (cancelled.has(job.id)) throw cancelError();
+    self.postMessage({ id: job.id, type: 'progress', label });
+  };
+  // 끝난 뒤에 도착한 취소 표시는 남겨 둘 이유가 없다(id는 늘어나기만 한다).
+  for (const id of cancelled) if (id < job.id) cancelled.delete(id);
   try {
+    await gpuCheck;
+    if (cancelled.has(job.id)) throw cancelError();
+    if (!current && NEEDS_CURRENT.has(job.type)) throw new DotError('작업자를 다시 시작해 열어 둔 그림이 사라졌습니다. 그림을 다시 열어 주세요.');
     if (job.type === 'open') {
       const { original, w, h, settings } = job;
       current = await load(original, w, h, settings, progress, Boolean(job.whole));
@@ -68,6 +81,7 @@ async function handle(job) {
         candidates: current.jevStrokes.map(c => ({ label: c.label, picture: picture(c.image) })) });
     } else if (job.type === 'jevFills') {
       // 2단계: 고른 선 처리로 채색 후보
+      if (!current.jevStrokes) throw new DotError('다시 비교해 주세요.');
       const fills = fillCandidates(current.jevStrokes[job.index], faithfulParts().reduced);
       self.postMessage({ id: job.id, type: 'done', candidates: fills.map(c => ({ label: c.label, picture: picture(c.image) })) });
     } else if (job.type === 'jevRender') {
@@ -127,9 +141,12 @@ async function handle(job) {
       self.postMessage({ id: job.id, type: 'done', final, status }, [final.bytes.buffer]);
     }
   } catch (error) {
+    if (error?.cancelled) { self.postMessage({ id: job.id, type: 'cancelled' }); return; }
     console.error(error);
     const message = error instanceof DotError ? error.message : `${Errors.render} (${error.message})`;
     self.postMessage({ id: job.id, type: 'error', message, canSkip: Boolean(error.canSkip) });
+  } finally {
+    cancelled.delete(job.id);
   }
 }
 
@@ -143,7 +160,10 @@ const keepManualBackground = settings => current.manualWhole && current.backgrou
 
 async function load(raw, w, h, settings, progress, manualWhole = false) {
   const wanted = upscaleModel(raw, settings.upscale, Math.max(w, h));
-  const { image: original, upscaled, skipped } = await tryUpscale(raw, wanted, progress);
+  // 배경 방식만 바꾼 경우처럼 원본·모델이 같으면 앞서 키운 그림을 다시 쓴다(ESRGAN은 오래 걸린다).
+  const cache = current?.upscaleCache;
+  const upscale = wanted && cache?.raw === raw && cache.model === wanted ? cache.result : await tryUpscale(raw, wanted, progress);
+  const { image: original, upscaled, skipped } = upscale;
   let prepared;
   const whole = manualWhole || settings.background === 'keep';
   try {
@@ -153,7 +173,8 @@ async function load(raw, w, h, settings, progress, manualWhole = false) {
     error.canSkip = !whole;
     throw error;
   }
-  return { raw, wanted, upscaled, skipped, w, h, background: settings.background, ...prepared, faithful: null, whole, manualWhole };
+  return { raw, wanted, upscaled, skipped, w, h, background: settings.background, ...prepared, faithful: null, whole, manualWhole,
+    upscaleCache: upscaled ? { raw, model: wanted, result: upscale } : null };
 }
 
 /** AI 업스케일이 실패해도(파일을 못 받음 등) 그림은 연다: 키우지 않은 원본으로 도트화하고 이유를 남긴다. */
@@ -162,6 +183,7 @@ async function tryUpscale(image, model, progress) {
   try {
     return { image: await upscaleImage(image, model, progress), upscaled: model, skipped: null };
   } catch (error) {
+    if (error?.cancelled) throw error;
     console.error(error);
     return { image, upscaled: null, skipped: error instanceof DotError ? 'AI 파일을 준비하지 못함' : '실행 오류' };
   }
@@ -187,5 +209,9 @@ async function prepareDotSubject(image, background, progress) {
 let queue = Promise.resolve();
 self.onmessage = ({ data }) => {
   if (data.type === 'adaptive-native-response') receiveNativeAdaptive(data);
+  // 취소는 줄을 서지 않고 바로 표시해야 돌고 있는 일이 다음 진행 단계에서 멈춘다.
+  else if (data.type === 'cancel') cancelled.add(data.id);
+  // 저장된 AI 파일을 지우면 메모리에 올려 둔 AI도 놓는다(돌고 있는 일이 끝난 뒤에).
+  else if (data.type === 'clearAI') queue = queue.then(releaseAI);
   else queue = queue.then(() => handle(data));
 };
